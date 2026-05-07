@@ -1,1 +1,8 @@
 pdfs/*
+build/
+output/
+.DS_Store
+*.pyc
+__pycache__/
+.venv/
+venv/

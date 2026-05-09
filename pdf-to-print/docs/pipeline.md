@@ -56,7 +56,7 @@ build/svg/page_NN.svg (vector paths для vpype)
     │       read --quantization 0.05mm --single-layer → pagerotate (CCW 90°)
     │            → scale -o 0 0 -- 1 -1 (Y flip, SVG-down → Bambu-up)
     │            → translate PAPER_ORIGIN_* (paper → nozzle frame)
-    │            → optional linemerge --tolerance 0.05mm (или --skip-linemerge)
+    │            → по умолчанию в build.sh: --skip-linemerge (см. PDF_TO_PRINT_LINEMERGE); иначе linemerge 0.05mm
     │            → сортировка путей: сверху вниз по строкам, в строке слева направо
     │            → gwrite -p bambu_p1s_umts (см. templates/vpype_profile.toml)
     ▼
@@ -124,6 +124,8 @@ READING_ROW_GAP_BREAK_MM = 4.5
 READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False  # см. PDF_TO_PRINT_READING_AXIS_AUTO
 ```
+
+**Linemerge:** [`scripts/build.sh`](scripts/build.sh) по умолчанию добавляет **`--skip-linemerge`**, чтобы после скелетного трейса короткие сегменты не сливались в одну полилинию с произвольным порядком вершин (сортировка чтения переставляет только целые штрихи, не точки внутри линии). Вернуть слияние (меньше pen-up): **`PDF_TO_PRINT_LINEMERGE=1`**. Ручной запуск `svg_to_gcode.py` без `--skip-linemerge` по умолчанию оставляет linemerge включённым.
 
 **Порядок штрихов:** разрыв строк `READING_ROW_GAP_BREAK_MM` задаётся в **мм**; для геометрии vpype (внутренние единицы, px-like) порог переводится через `vp.convert_length`, для проверки по G-code используются те же мм без перевода — иначе кластеризация строк на генераторе и у валидатора расходятся.
 

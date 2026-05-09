@@ -54,6 +54,7 @@ def main() -> None:
             [
                 sys.executable,
                 str(ROOT / "scripts" / "svg_to_gcode.py"),
+                "--skip-linemerge",
                 "--svg-dir",
                 str(svg_dir),
                 "--out-dir",

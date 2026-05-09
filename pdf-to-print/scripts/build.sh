@@ -19,6 +19,10 @@
 # Reading order (Phase 2 / 2b): top-to-bottom rows, left-to-right within row — same flags on
 # svg_to_gcode and validate_reading_order_gcode. Override vertical order: PDF_TO_PRINT_READING_INVERT_Y=0
 # Optional: READING_FORCE_AXIS=auto|y|x (default y).
+#
+# Linemerge: build.sh passes --skip-linemerge by default so vpype does not fuse short skeleton
+# segments into one polyline with zigzag vertex order (reading-order sort only permutes whole lines).
+# Re-enable merge (fewer pen-ups, riskier path order): PDF_TO_PRINT_LINEMERGE=1
 
 set -euo pipefail
 
@@ -54,6 +58,11 @@ case "${PDF_TO_PRINT_READING_INVERT_Y:-1}" in
     ;;
 esac
 
+LINEMERGE_OPTS=()
+if [[ "${PDF_TO_PRINT_LINEMERGE:-0}" != "1" ]]; then
+  LINEMERGE_OPTS+=(--skip-linemerge)
+fi
+
 # Activate venv if present
 if [[ -f .venv/bin/activate ]]; then
   # shellcheck disable=SC1091
@@ -75,7 +84,7 @@ fi
 
 echo ""
 echo ">>> Phase 2: SVG -> per-page G-code (reading-order: axis=${READING_FORCE_AXIS}, invert_y=${PDF_TO_PRINT_READING_INVERT_Y:-1})"
-python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}"
+python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}" "${LINEMERGE_OPTS[@]}"
 
 echo ""
 echo ">>> Phase 2b: validate reading order (all pages, strict)"

@@ -52,12 +52,12 @@ pdfs/2.pdf (24 страницы handwriting font, page 165×205 mm portrait)
     ▼
 build/svg/page_NN.svg (vector paths для vpype)
     │
-    ├── scripts/svg_to_gcode.py (uses .venv/bin/vpype)
-    │       vpype read --quantization 0.05mm → pagerotate (CCW 90°)
+    ├── scripts/svg_to_gcode.py (vpype_cli.execute + сортировка штрихов в Python)
+    │       read --quantization 0.05mm --single-layer → pagerotate (CCW 90°)
     │            → scale -o 0 0 -- 1 -1 (Y flip, SVG-down → Bambu-up)
-    │            → translate PAPER_ORIGIN_* (paper → nozzle frame, см. константы в скрипте)
-    │            → linemerge --tolerance 0.05mm (без --no-flip: иначе другой порядок штрихов)
-    │            → опция: --skip-linemerge — без склейки, порядок как в SVG
+    │            → translate PAPER_ORIGIN_* (paper → nozzle frame)
+    │            → optional linemerge --tolerance 0.05mm (или --skip-linemerge)
+    │            → сортировка путей: сверху вниз по строкам, в строке слева направо
     │            → gwrite -p bambu_p1s_umts (см. templates/vpype_profile.toml)
     ▼
 build/gcode/page_NN.gcode (24 файла, ~5-7 MB каждый, чистые G0/G1+Z-hop, без headers)
@@ -114,12 +114,22 @@ Inkscape экспортирует SVG width/height без unit (user units = px 
 Главный конвертер. Запускает vpype для каждого SVG. Параметры в начале файла (реальные имена — в [`scripts/svg_to_gcode.py`](scripts/svg_to_gcode.py)):
 ```python
 PAPER_ORIGIN_X / PAPER_ORIGIN_Y   # из PAPER_* и PEN_OFFSET_* (nozzle frame)
-Z_PEN_DOWN = 18.0                 # мм: сопло когда перо касается бумаги
-Z_HOP = 15.0                      # мм: подъём сопла между штрихами (line_end)
-READ_QUANTIZATION = "0.05mm"      # vpype read: шаг линеаризации кривых (без --simplify)
-LINEMERGE_TOLERANCE = "0.05mm"    # linemerge (без --no-flip); vpype filter не используется
+Z_PEN_DOWN = 18.0
+Z_HOP = 15.0
+READ_QUANTIZATION = "0.05mm"
+LINEMERGE_TOLERANCE = "0.05mm"
 VPYPE_PROFILE = "bambu_p1s_umts"
+READING_SORT_INVERT_Y = True   # по умолчанию «верх тетради» первым; отключение: --no-invert-reading-sort или env 0
+READING_ROW_GAP_BREAK_MM = 4.5
+READING_ROW_AXIS_RATIO = 0.45
+READING_ROW_AXIS_AUTO = False  # см. PDF_TO_PRINT_READING_AXIS_AUTO
 ```
+
+**Порядок штрихов:** разрыв строк `READING_ROW_GAP_BREAK_MM` задаётся в **мм**; для геометрии vpype (внутренние единицы, px-like) порог переводится через `vp.convert_length`, для проверки по G-code используются те же мм без перевода — иначе кластеризация строк на генераторе и у валидатора расходятся.
+
+После трансформов скрипт **собирает все слои vpype в один** (порядок как в `gwrite` — обход `document.layers`), иначе сортировка «внутри каждого слоя» не совпадала бы с одним потоком в G-code. Далее **построчно**: кластеризация центроидов по **разрыву** вдоль оси строки (`READING_ROW_GAP_BREAK_MM`, переопределение: `--reading-row-gap-mm`, env `PDF_TO_PRINT_READING_ROW_GAP_MM` / legacy `PDF_TO_PRINT_READING_ROW_BUCKET_MM`). `read --single-layer` остаётся важен для единого SVG, но дальше по пайплайну слой всё равно может размножаться. **По умолчанию ось `y`:** строки — горизонтальные полосы на столе (сверху вниз); внутри строки порядок по ключам `(min(X), mean(X), mean(Y))`, чтобы при совпадающем min(X) после квантизации порядок не повторял случайный порядок трейса. Отключить «верх первым»: `--no-invert-reading-sort` или `PDF_TO_PRINT_READING_INVERT_Y=0`. Чтобы снова включить старый эвристический «auto» по размаху X/Y, задайте `--reading-force-axis auto` и `PDF_TO_PRINT_READING_AXIS_AUTO=1`. Явная колонка: `--reading-force-axis x` или env `PDF_TO_PRINT_READING_FORCE_AXIS=x`.
+
+**Проверка G-code:** [`scripts/validate_reading_order_gcode.py`](scripts/validate_reading_order_gcode.py) — восстанавливает каждый штрих как полилинию (цель `G0` первой вершины + все `G1 XY` до подъёма пера), затем сверяет порядок с тем же алгоритмом permutation, что и vpype; флаг **`--strict`** дополнительно проверяет монотонность полос и порядок внутри строки. Дымовый прогон без PDF: [`scripts/e2e_reading_order_pipeline.py`](scripts/e2e_reading_order_pipeline.py). `./scripts/build.sh` выполняет e2e (Phase 0), затем после генерации страниц — **`--strict` для каждого `build/gcode/page_*.gcode`** (Phase 2b); при ошибке сборка не доходит до merge.
 
 При запуске скрипт **перезаписывает `~/.vpype.toml`** с подставленными значениями `Z_PEN_DOWN` и `Z_HOP`. Не редактировать `~/.vpype.toml` вручную — будет затёрт при следующем запуске.
 
@@ -141,7 +151,7 @@ Bounds итогового G-code (pen-frame): X≈28.6..221, Y≈57..211 — в�
 
 ### `scripts/build.sh`
 
-Orchestrator. Активирует .venv, запускает 3 фазы. Phase 1 по умолчанию: `extract_pages_raster.sh`; для прямого SVG из Inkscape — третий аргумент `vector`, либо `EXTRACT_MODE=vector` / `USE_VECTOR_EXTRACT=1` (см. комментарии в [`scripts/build.sh`](scripts/build.sh)).
+Orchestrator. Активирует .venv: Phase 0 — `e2e_reading_order_pipeline.py`; Phase 1 по умолчанию — `extract_pages_raster.sh`; Phase 2 — `svg_to_gcode.py`; Phase 2b — валидация порядка штрихов для всех страниц; Phase 3 — merge. Для прямого SVG из Inkscape — третий аргумент `vector`, либо `EXTRACT_MODE=vector` / `USE_VECTOR_EXTRACT=1` (см. комментарии в [`scripts/build.sh`](scripts/build.sh)).
 
 ---
 

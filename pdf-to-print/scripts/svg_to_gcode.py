@@ -2,11 +2,11 @@
 """Convert SVG pages from build/svg/ into per-page G-code drawing blocks.
 
 Pipeline per SVG:
-  1. read SVG (vpype)
+  1. read SVG (--quantization READ_QUANTIZATION; no --simplify; no vpype filter)
   2. pagerotate (CCW 90°, portrait -> landscape)
   3. scale 1 -1 around origin (flip Y, SVG-down -> Bambu-up)
-  4. translate to paper origin (X=24, Y=217 — paper bottom-left in landscape coords)
-  5. linemerge + linesort (path optimization)
+  4. translate to paper origin in nozzle frame (PAPER_ORIGIN_*)
+  5. linemerge --tolerance LINEMERGE_TOLERANCE (optional; skip with --skip-linemerge for strict SVG path order)
   6. gwrite with `bambu_p1s_umts` profile (no header/footer, just G0/G1 + Z-hop)
 
 Output: build/gcode/page_NN.gcode
@@ -60,10 +60,16 @@ PAPER_ORIGIN_Y = f"{PAPER_FRONT + PAPER_H - PEN_OFFSET_Y}mm"  # 252.9
 # Source: UMTS docs §Z-Offset: +17 Stabilo, +20 POSCA. Xiaomi gel ≈ +18 (between).
 # Calibrate live (Test 3 of operator-manual.md) and update here.
 Z_PEN_DOWN = 18.0
-Z_HOP = 3.0
+Z_HOP = 15.0
 
 VPYPE_PROFILE = "bambu_p1s_umts"
-LINEMERGE_TOLERANCE = "0.1mm"
+# Curve linearization on SVG import (vpype read --quantization). Finer = more vertices / larger G-code.
+READ_QUANTIZATION = "0.05mm"
+LINEMERGE_TOLERANCE = "0.05mm"
+
+# XY feed for pen-down moves (G1 … X Y F…). Marlin/Bambu use mm/min → mm/s × 60.
+DRAW_SPEED_MM_S = 50.0
+DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
 
 
 def find_vpype() -> str:
@@ -95,34 +101,37 @@ layer_start = ""
 layer_end = ""
 line_start = ""
 segment_first = "G0 X{{x:.3f}} Y{{y:.3f}} F18000\\nG1 Z{z_down:.3f} F1200\\n"
-segment = "G1 X{{x:.3f}} Y{{y:.3f}} F12000\\n"
+segment = "G1 X{{x:.3f}} Y{{y:.3f}} F{DRAW_FEED_MM_MIN}\\n"
 line_end = "G1 Z{z_up:.3f} F1200\\n"
-info = "Bambu Lab P1S + UMTS pen plotter. Z_PEN_DOWN={Z_PEN_DOWN} Z_HOP={Z_HOP}"
+info = "Bambu Lab P1S + UMTS pen plotter. Z_PEN_DOWN={Z_PEN_DOWN} Z_HOP={Z_HOP} draw={DRAW_SPEED_MM_S}mm/s"
 """
     target = Path.home() / ".vpype.toml"
     target.write_text(content)
     print(f"  wrote {target} (Z down={z_down}, Z up={z_up})")
 
 
-def convert_one(vpype: str, svg: Path, out: Path) -> None:
+def convert_one(
+    vpype: str, svg: Path, out: Path, *, skip_linemerge: bool = False
+) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     # vpype command chain.
     # - pagerotate --clockwise: SVG portrait → landscape, fixes upside-down-by-X
     # - scale 1 -1: SVG Y-down → bed Y-up
     # - translate: position content at paper origin in nozzle frame
-    # - linemerge: merge adjacent path segments (no reorder)
-    # - NO linesort: linesort optimizes travel but reorders strokes randomly,
-    #   destroying handwriting top-to-bottom reading appearance.
-    #   Inkscape preserves PDF rendering order (≈ reading order) — keep it.
-    args = [
+    # - linemerge: merge nearby endpoints (vpype may reverse a stroke to connect — same as
+    #   default linemerge; we do NOT pass --no-flip: with --no-flip, merge rules change and
+    #   the greedy merge can yield a very different stroke order on the page).
+    # - NO linesort: it reorders paths to minimize travel — would break left-to-right order.
+    args: list[str] = [
         vpype,
-        "read", str(svg),
+        "read", "--quantization", READ_QUANTIZATION, str(svg),
         "pagerotate", "--clockwise",
         "scale", "-o", "0", "0", "--", "1", "-1",
         "translate", PAPER_ORIGIN_X, PAPER_ORIGIN_Y,
-        "linemerge", "--tolerance", LINEMERGE_TOLERANCE,
-        "gwrite", "-p", VPYPE_PROFILE, str(out),
     ]
+    if not skip_linemerge:
+        args.extend(["linemerge", "--tolerance", LINEMERGE_TOLERANCE])
+    args.extend(["gwrite", "-p", VPYPE_PROFILE, str(out)])
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR processing {svg.name}:", file=sys.stderr)
@@ -136,6 +145,11 @@ def main() -> None:
                         help="directory with page_NN.svg (default: build/svg)")
     parser.add_argument("--out-dir", default="build/gcode",
                         help="output directory (default: build/gcode)")
+    parser.add_argument(
+        "--skip-linemerge",
+        action="store_true",
+        help="omit linemerge (strict SVG path order; larger G-code, more pen-ups)",
+    )
     args = parser.parse_args()
 
     svg_dir = Path(args.svg_dir)
@@ -152,7 +166,7 @@ def main() -> None:
     for svg in svgs:
         out = out_dir / (svg.stem + ".gcode")
         print(f"  {svg.name} -> {out.name}")
-        convert_one(vpype, svg, out)
+        convert_one(vpype, svg, out, skip_linemerge=args.skip_linemerge)
 
     total_size = sum(p.stat().st_size for p in out_dir.glob("page_*.gcode"))
     print(f"✅ generated {len(svgs)} G-code files ({total_size/1e6:.1f} MB total)")

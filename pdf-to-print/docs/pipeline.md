@@ -41,17 +41,23 @@
 ```
 pdfs/2.pdf (24 страницы handwriting font, page 165×205 mm portrait)
     │
-    ├── scripts/extract_pages.sh
+    ├── scripts/extract_pages.sh          (vector — явный выбор или USE_VECTOR_EXTRACT=1)
     │       inkscape --pages=N --export-text-to-path --export-filename=...
-    │       page count detection: mdls (macOS) | python regex fallback
+    │       page count: mdls (macOS) | python regex fallback
+    │
+    ├── scripts/extract_pages_raster.sh    (default в build.sh)
+    │       inkscape --pages=N --export-type=png --export-dpi=DPI
+    │       → по умолчанию png_to_skeleton_svg.py (скелет штриха = одна линия)
+    │       → или TRACE_MODE=potrace: mkbitmap → potrace → normalize_traced_svg.py
     ▼
-build/svg/page_NN.svg (24 файла, ~4-5 MB каждый, vector text-as-paths)
+build/svg/page_NN.svg (vector paths для vpype)
     │
     ├── scripts/svg_to_gcode.py (uses .venv/bin/vpype)
-    │       vpype read → pagerotate (CCW 90°)
+    │       vpype read --quantization 0.05mm → pagerotate (CCW 90°)
     │            → scale -o 0 0 -- 1 -1 (Y flip, SVG-down → Bambu-up)
-    │            → translate 24mm 217mm (paper origin in landscape pen-frame)
-    │            → linemerge --tolerance 0.1mm + linesort
+    │            → translate PAPER_ORIGIN_* (paper → nozzle frame, см. константы в скрипте)
+    │            → linemerge --tolerance 0.05mm (без --no-flip: иначе другой порядок штрихов)
+    │            → опция: --skip-linemerge — без склейки, порядок как в SVG
     │            → gwrite -p bambu_p1s_umts (см. templates/vpype_profile.toml)
     ▼
 build/gcode/page_NN.gcode (24 файла, ~5-7 MB каждый, чистые G0/G1+Z-hop, без headers)
@@ -80,6 +86,20 @@ PDF → SVG. Аргументы: `$1=PDF` (default `pdfs/2.pdf`), `$2=out_dir` (
 - Page count detection: `mdls -name kMDItemNumberOfPages -raw` → fallback на Python regex поиска `/Type /Page` маркеров в бинарнике PDF
 - Inkscape флаг `--pdf-page=N` НЕ существует в 1.4+ — правильно `--pages=N`
 
+### `scripts/extract_pages_raster.sh`
+
+PDF → PNG → SVG. По умолчанию **`TRACE_MODE=skeleton`**: [`scripts/png_to_skeleton_svg.py`](scripts/png_to_skeleton_svg.py) бинаризует страницу, строит **скелет** (`skimage.morphology.skeletonize`) и выпускает **полилинии по центру штриха**. Так убирается эффект «двух контуров», когда толстый штрих в растре — это **кольцо пикселей**: potrace обводил **внешний и внутренний край** кольца.
+
+Режим **`TRACE_MODE=potrace`**: PNG → ImageMagick → mkbitmap → potrace → [`normalize_traced_svg.py`](scripts/normalize_traced_svg.py) — контур силуэта; на кольцевых штрихах снова возможны два контура.
+
+Зависимости: `inkscape`; `.venv` с **numpy, scikit-image, networkx, Pillow**. Для potrace-режима дополнительно: `potrace`, `mkbitmap`, ImageMagick.
+
+Переменные окружения: `TRACE_MODE`, `EXPORT_DPI` (default 300); для potrace — `MKBITMAP_OPTS`, `POTRACE_OPTS`.
+
+Запуск через orchestrator: по умолчанию raster (`./scripts/build.sh`). Векторный экспорт Inkscape: `./scripts/build.sh … vector` или `USE_VECTOR_EXTRACT=1`.
+
+Компромиссы: скелет даёт «ручку по середине» штриха, не идеальный офсетный контур; много коротких отрезков → крупнее SVG/G-code; очень тонкий текст может ломаться при морфологии — тогда поднять `EXPORT_DPI` или вернуться к `TRACE_MODE=potrace` для эксперимента.
+
 ### `scripts/inspect_svg.py`
 
 Диагностический скрипт — печатает viewBox, размер в мм, count элементов, vector vs raster heuristic, превью первых path. Запускать вручную для проверки нового PDF:
@@ -91,15 +111,14 @@ Inkscape экспортирует SVG width/height без unit (user units = px 
 
 ### `scripts/svg_to_gcode.py`
 
-Главный конвертер. Запускает vpype для каждого SVG. Параметры в начале файла:
+Главный конвертер. Запускает vpype для каждого SVG. Параметры в начале файла (реальные имена — в [`scripts/svg_to_gcode.py`](scripts/svg_to_gcode.py)):
 ```python
-PAPER_ORIGIN_X = "24mm"     # paper bottom-left X в landscape pen-frame
-PAPER_ORIGIN_Y = "217mm"    # paper TOP Y (после scale 1 -1 Y становится отрицательным,
-                            # translate шифтит на 217 чтобы content оказался Y=52..217)
-Z_PEN_DOWN = 18.0           # nozzle Z when pen touches paper (UMTS pen sticks ~18mm below nozzle)
-Z_HOP = 3.0                 # additional Z lift between strokes (Z-hop)
+PAPER_ORIGIN_X / PAPER_ORIGIN_Y   # из PAPER_* и PEN_OFFSET_* (nozzle frame)
+Z_PEN_DOWN = 18.0                 # мм: сопло когда перо касается бумаги
+Z_HOP = 15.0                      # мм: подъём сопла между штрихами (line_end)
+READ_QUANTIZATION = "0.05mm"      # vpype read: шаг линеаризации кривых (без --simplify)
+LINEMERGE_TOLERANCE = "0.05mm"    # linemerge (без --no-flip); vpype filter не используется
 VPYPE_PROFILE = "bambu_p1s_umts"
-LINEMERGE_TOLERANCE = "0.1mm"
 ```
 
 При запуске скрипт **перезаписывает `~/.vpype.toml`** с подставленными значениями `Z_PEN_DOWN` и `Z_HOP`. Не редактировать `~/.vpype.toml` вручную — будет затёрт при следующем запуске.
@@ -112,7 +131,7 @@ LINEMERGE_TOLERANCE = "0.1mm"
 - SVG: portrait 165×205 mm, Y down (top of page = Y=0)
 - `pagerotate` (CCW): становится 205×165 landscape, content повёрнут
 - `scale -o 0 0 -- 1 -1`: Y инвертирован относительно (0,0). Pen-frame Y up.
-- `translate 24mm 217mm`: content перемещается в paper bounds X=24..229, Y=52..217
+- `translate` на `PAPER_ORIGIN_*`: content в области бумаги в координатах сопла (см. скрипт)
 
 Bounds итогового G-code (pen-frame): X≈28.6..221, Y≈57..211 — внутри paper и UMTS safe zone.
 
@@ -122,7 +141,7 @@ Bounds итогового G-code (pen-frame): X≈28.6..221, Y≈57..211 — в�
 
 ### `scripts/build.sh`
 
-Orchestrator. Активирует .venv, синхронизирует `~/.vpype.toml` из `templates/`, запускает 3 фазы.
+Orchestrator. Активирует .venv, запускает 3 фазы. Phase 1 по умолчанию: `extract_pages_raster.sh`; для прямого SVG из Inkscape — третий аргумент `vector`, либо `EXTRACT_MODE=vector` / `USE_VECTOR_EXTRACT=1` (см. комментарии в [`scripts/build.sh`](scripts/build.sh)).
 
 ---
 
@@ -156,18 +175,16 @@ Orchestrator. Активирует .venv, синхронизирует `~/.vpype
 
 ### `templates/vpype_profile.toml`
 
-`gwrite` профиль для vpype-gcode. Ключевые поля:
+Референс структуры `gwrite`; **фактический** `~/.vpype.toml` генерирует `svg_to_gcode.write_vpype_profile()` с подстановкой `Z_PEN_DOWN`, `Z_HOP`, `DRAW_FEED_MM_MIN`. Ключевые поля:
 - `unit = "mm"` — выход в миллиметрах
-- `vertical_flip = false` — Y orientation handled in pipeline (`scale 1 -1`), не в gwrite
-- `segment_first` — травел на начало path (G0 F18000) + опускание ручки (G1 Z0)
-- `segment` — рисование (G1 X Y F12000 = 200 мм/с)
-- `line_end` — Z-hop вверх (G1 Z3) после path
+- `vertical_flip = false` — ориентация Y в пайплайне (`scale 1 -1`), не в gwrite
+- `segment_first` — травел (G0 F18000) + опускание (G1 Z = Z_PEN_DOWN)
+- `segment` — рисование G1 XY с F из `DRAW_SPEED_MM_S` (мм/с × 60 = мм/мин)
+- `line_end` — подъём до `Z_PEN_DOWN + Z_HOP` после path
 
-**Скорости**:
-- Travel `F18000` = 300 мм/с
-- Draw `F12000` = 200 мм/с
+**Скорости** (по умолчанию в скрипте): travel F18000 (300 мм/с); draw — см. `DRAW_SPEED_MM_S` (например 50 мм/с → F3000).
 
-Для гелевой ручки 200 мм/с может быть слишком быстро (размазывание). Снижается правкой `segment` строки в profile (например F9000 = 150 мм/с) и пере-копированием в `~/.vpype.toml` через `cp templates/vpype_profile.toml ~/.vpype.toml` или `./scripts/build.sh` (синкает автоматом).
+Для гелевой ручки при необходимости снизить `DRAW_SPEED_MM_S` в [`scripts/svg_to_gcode.py`](scripts/svg_to_gcode.py) и перегенерировать — не копировать шаблон вручную в `~/.vpype.toml`.
 
 ---
 
@@ -189,7 +206,7 @@ cp /path/new.pdf pdfs/new.pdf
 ### Другая ручка
 
 1. Откалибровать Z-offset (Test 3) → новое значение в Orca printer profile
-2. Если ручка медленнее (POSCA-style маркер) — снизить F12000 → F2000-3000 в `templates/vpype_profile.toml`
+2. Если ручка медленнее (POSCA-style маркер) — снизить `DRAW_SPEED_MM_S` в `scripts/svg_to_gcode.py` (профиль перегенерируется в `~/.vpype.toml`)
 3. Перегенерировать через `./scripts/build.sh`
 
 ### Зеркалирование чётных страниц (mirror margins)
@@ -224,3 +241,4 @@ M400 U1  →  M0
 - **Корешок тетради создаёт неровность** ~10 мм от сгиба. Линии в этой зоне могут быть искажены.
 - **Python 3.14 несовместим** с vpype (pkg_resources broken). Используем 3.13.
 - **Inkscape >= 1.4 обязателен** — флаг `--pages=N` появился в этой версии (раньше был `--pdf-page=N`).
+- **Phase 1 raster** по умолчанию скелетон (Python); режим `TRACE_MODE=potrace` требует ImageMagick + potrace и может снова давать два контура на «кольцевых» штрихах.

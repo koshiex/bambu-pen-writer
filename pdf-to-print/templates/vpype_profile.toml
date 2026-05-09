@@ -6,6 +6,7 @@
 # This file is kept as documentation of the profile structure.
 # To change Z-offset calibration, edit Z_PEN_DOWN / Z_HOP in svg_to_gcode.py
 # and re-run; ~/.vpype.toml will be regenerated.
+# Draw speed (F on segment): DRAW_SPEED_MM_S → F = mm/s × 60 (mm/min).
 
 [gwrite.bambu_p1s_umts]
 unit = "mm"
@@ -15,10 +16,11 @@ document_end = ""
 layer_start = ""
 layer_end = ""
 line_start = ""
-# Z values below are PLACEHOLDERS — replaced at runtime with absolute nozzle Z:
-#   pen down = Z_PEN_DOWN          (e.g. 18.0 mm = pen tip touches paper)
-#   pen up   = Z_PEN_DOWN + Z_HOP  (e.g. 21.0 mm = nozzle 21mm above bed)
+# Z values below are PLACEHOLDERS — replaced at runtime by svg_to_gcode.write_vpype_profile():
+#   pen down = Z_PEN_DOWN          (e.g. 18.0 mm)
+#   pen up   = Z_PEN_DOWN + Z_HOP  (e.g. 18 + 15 = 33 mm с Z_HOP=15)
+# F on segment = DRAW_SPEED_MM_S × 60 (mm/min).
 segment_first = "G0 X{x:.3f} Y{y:.3f} F18000\nG1 Z<Z_PEN_DOWN> F1200\n"
-segment       = "G1 X{x:.3f} Y{y:.3f} F12000\n"
+segment       = "G1 X{x:.3f} Y{y:.3f} F3000\n"
 line_end      = "G1 Z<Z_PEN_DOWN+Z_HOP> F1200\n"
-info = "Bambu Lab P1S + UMTS pen plotter. F12000=200mm/s draw, F18000=300mm/s travel."
+info = "Bambu Lab P1S + UMTS pen plotter. See DRAW_SPEED_MM_S in svg_to_gcode.py; F18000 travel."

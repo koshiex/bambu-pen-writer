@@ -76,6 +76,10 @@ VPYPE_PROFILE = "bambu_p1s_umts"
 # Curve linearization on SVG import (vpype read --quantization). Finer = more vertices / larger G-code.
 READ_QUANTIZATION = "0.05mm"
 LINEMERGE_TOLERANCE = "0.05mm"
+# Minimum stroke length after tracing. Removes 1–3 px skeleton junction artifacts
+# (0.085–0.25 mm at 300 DPI) while preserving dots on й/ё/punctuation (≥ 0.42 mm).
+# Override: PDF_TO_PRINT_STROKE_MIN_LENGTH_MM env or --stroke-min-length CLI.
+STROKE_MIN_LENGTH_MM = 0.3
 
 # Stroke order: row-major — see apply_reading_order_sort().
 # True = smaller machine Y first after transforms (typical “top of notebook first” on P1S + UMTS).
@@ -197,6 +201,19 @@ def resolve_reading_invert_y(*, cli_invert: bool, cli_no_invert: bool) -> bool:
     if cli_invert:
         return True
     return _effective_reading_sort_invert_y(False)
+
+
+def _effective_stroke_min_length_mm(cli_val: float | None) -> float:
+    if cli_val is not None and cli_val >= 0:
+        return cli_val
+    env = os.environ.get("PDF_TO_PRINT_STROKE_MIN_LENGTH_MM", "").strip()
+    try:
+        v = float(env)
+        if v >= 0:
+            return v
+    except ValueError:
+        pass
+    return STROKE_MIN_LENGTH_MM
 
 
 def _effective_reading_row_gap_mm(cli_gap: float | None) -> float:
@@ -469,6 +486,7 @@ def convert_one(
     no_invert_reading_sort: bool = False,
     reading_row_gap_mm: float | None = None,
     reading_force_axis: str | None = None,
+    stroke_min_length_mm: float | None = None,
 ) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     invert_y = resolve_reading_invert_y(
@@ -477,6 +495,7 @@ def convert_one(
     )
     gap_mm = _effective_reading_row_gap_mm(reading_row_gap_mm)
     axis = reading_force_axis if reading_force_axis in ("y", "x") else None
+    min_len_mm = _effective_stroke_min_length_mm(stroke_min_length_mm)
     qs = shlex.quote(str(svg.resolve()))
     qout = shlex.quote(str(out.resolve()))
     parts = [
@@ -500,6 +519,8 @@ def convert_one(
     ]
     if not skip_linemerge:
         parts.extend(["linemerge", "--tolerance", LINEMERGE_TOLERANCE])
+    if min_len_mm > 0:
+        parts.extend(["filter", "--min-length", f"{min_len_mm}mm"])
     preprocess = " ".join(parts)
     doc = execute(preprocess)
     merge_all_layers_to_layer_one(doc)
@@ -556,6 +577,17 @@ def main() -> None:
             "y=rows along gcode_Y (legacy), auto=see PDF_TO_PRINT_READING_AXIS_AUTO"
         ),
     )
+    parser.add_argument(
+        "--stroke-min-length",
+        type=float,
+        default=None,
+        metavar="MM",
+        dest="stroke_min_length_mm",
+        help=(
+            "remove strokes shorter than MM mm after tracing — eliminates skeleton junction "
+            "artifacts (env PDF_TO_PRINT_STROKE_MIN_LENGTH_MM, default 0.3). Set 0 to disable."
+        ),
+    )
     args = parser.parse_args()
 
     svg_dir = Path(args.svg_dir)
@@ -580,6 +612,7 @@ def main() -> None:
             no_invert_reading_sort=args.no_invert_reading_sort,
             reading_row_gap_mm=args.reading_row_gap_mm,
             reading_force_axis=fa,
+            stroke_min_length_mm=args.stroke_min_length_mm,
         )
 
     total_size = sum(p.stat().st_size for p in out_dir.glob("page_*.gcode"))

@@ -133,7 +133,10 @@ for i in $(seq 1 "$PAGE_COUNT"); do
     potrace $POTRACE_OPTS -s -o "$raw_svg" "$pbm"
     "$PYTHON" "$NORMALIZE" "$raw_svg" "$out"
   else
-    "$PYTHON" "$SKELETON" "$png" "$out"
+    # min-polyline-points=4: require ≥3 segments (~0.25mm at 300dpi) to keep a skeleton chain.
+    # Removes 1-2px junction artifacts before SVG. Override: SKELETON_MIN_POINTS=N
+    SKELETON_MIN_PTS="${SKELETON_MIN_POINTS:-4}"
+    "$PYTHON" "$SKELETON" "$png" "$out" --min-polyline-points "$SKELETON_MIN_PTS"
   fi
 done
 

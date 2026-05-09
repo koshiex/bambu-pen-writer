@@ -20,9 +20,11 @@
 # After portrait→landscape transform: text rows lie along gcode_X (descending), left-right along gcode_Y.
 # Default axis: x (READING_FORCE_AXIS=x). Override: READING_FORCE_AXIS=y for legacy mode.
 #
-# Linemerge: build.sh passes --skip-linemerge by default so vpype does not fuse short skeleton
-# segments into one polyline with zigzag vertex order (reading-order sort only permutes whole lines).
-# Re-enable merge (fewer pen-ups, riskier path order): PDF_TO_PRINT_LINEMERGE=1
+# Linemerge: enabled by default (merges adjacent segments → fewer pen-ups, absorbs junction noise).
+# Disable: PDF_TO_PRINT_SKIP_LINEMERGE=1 ./build.sh
+#
+# Noise filter: strokes shorter than STROKE_MIN_LENGTH_MM (default 0.3mm) removed after tracing.
+# Override: PDF_TO_PRINT_STROKE_MIN_LENGTH_MM=0.5 (raise) or =0 (disable).
 
 set -euo pipefail
 
@@ -54,9 +56,8 @@ cd "$ROOT"
 READING_FORCE_AXIS="${READING_FORCE_AXIS:-x}"
 READING_OPTS=(--reading-force-axis "${READING_FORCE_AXIS}")
 
-LINEMERGE_OPTS=()
-if [[ "${PDF_TO_PRINT_LINEMERGE:-0}" != "1" ]]; then
-  LINEMERGE_OPTS+=(--skip-linemerge)
+if [[ "${PDF_TO_PRINT_SKIP_LINEMERGE:-0}" == "1" ]]; then
+  READING_OPTS+=(--skip-linemerge)
 fi
 
 # Activate venv if present
@@ -80,7 +81,7 @@ fi
 
 echo ""
 echo ">>> Phase 2: SVG -> per-page G-code (reading-order: axis=${READING_FORCE_AXIS}, invert_y=${PDF_TO_PRINT_READING_INVERT_Y:-1})"
-python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}" "${LINEMERGE_OPTS[@]}"
+python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}"
 
 echo ""
 echo ">>> Phase 2b: validate reading order (all pages, strict)"

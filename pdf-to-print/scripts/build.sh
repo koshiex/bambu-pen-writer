@@ -16,9 +16,9 @@
 #   - Raster mode additionally: potrace, mkbitmap, magick (ImageMagick)
 #   - ~/.vpype.toml with [gwrite.bambu_p1s_umts] (see templates/vpype_profile.toml)
 #
-# Reading order (Phase 2 / 2b): top-to-bottom rows, left-to-right within row — same flags on
-# svg_to_gcode and validate_reading_order_gcode. Override vertical order: PDF_TO_PRINT_READING_INVERT_Y=0
-# Optional: READING_FORCE_AXIS=auto|y|x (default y).
+# Reading order (Phase 2 / 2b): top-to-bottom rows, left-to-right within row.
+# After portrait→landscape transform: text rows lie along gcode_X (descending), left-right along gcode_Y.
+# Default axis: x (READING_FORCE_AXIS=x). Override: READING_FORCE_AXIS=y for legacy mode.
 #
 # Linemerge: build.sh passes --skip-linemerge by default so vpype does not fuse short skeleton
 # segments into one polyline with zigzag vertex order (reading-order sort only permutes whole lines).
@@ -49,14 +49,10 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-READING_FORCE_AXIS="${READING_FORCE_AXIS:-y}"
+# Axis "x": text rows lie along gcode_X after portrait→landscape transform (default).
+# Use READING_FORCE_AXIS=y only for legacy/debugging; invert_y is irrelevant for axis=x.
+READING_FORCE_AXIS="${READING_FORCE_AXIS:-x}"
 READING_OPTS=(--reading-force-axis "${READING_FORCE_AXIS}")
-case "${PDF_TO_PRINT_READING_INVERT_Y:-1}" in
-  0|false|no|FALSE|NO) ;;
-  *)
-    READING_OPTS+=(--invert-reading-sort)
-    ;;
-esac
 
 LINEMERGE_OPTS=()
 if [[ "${PDF_TO_PRINT_LINEMERGE:-0}" != "1" ]]; then

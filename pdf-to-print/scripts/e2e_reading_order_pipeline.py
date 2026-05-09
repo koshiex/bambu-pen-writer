@@ -2,11 +2,12 @@
 """Smoke test: synthetic SVG -> svg_to_gcode -> validate_reading_order_gcode --strict.
 
 Covers:
-  - Wide aspect (regression for axis/column bug)
+  - force_axis=x (portrait→landscape geometry: rows along gcode_X, left-right along gcode_Y)
   - Multiple strokes per text row with intentional DOM order != left-to-right (tie-break keys)
   - Two rows + single full-width line (vertical progression)
+  - Rows output top-first (y_svg=14 first, y_svg=74 last)
 
-Uses default reading-order settings (same as production).
+Uses default reading-order settings (same as production, axis=x).
 Exit 0 only if validation passes. No printer required.
 
 Usage:
@@ -55,6 +56,7 @@ def main() -> None:
                 sys.executable,
                 str(ROOT / "scripts" / "svg_to_gcode.py"),
                 "--skip-linemerge",
+                "--reading-force-axis", "x",
                 "--svg-dir",
                 str(svg_dir),
                 "--out-dir",
@@ -80,6 +82,7 @@ def main() -> None:
                 str(ROOT / "scripts" / "validate_reading_order_gcode.py"),
                 "--strict",
                 "--quiet",
+                "--reading-force-axis", "x",
                 str(g),
             ],
             cwd=str(ROOT),

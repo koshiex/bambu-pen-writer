@@ -53,11 +53,13 @@ pdfs/2.pdf (24 страницы handwriting font, page 165×205 mm portrait)
 build/svg/page_NN.svg (vector paths для vpype)
     │
     ├── scripts/svg_to_gcode.py (vpype_cli.execute + сортировка штрихов в Python)
-    │       read --quantization 0.05mm --single-layer → pagerotate (CCW 90°)
-    │            → scale -o 0 0 -- 1 -1 (Y flip, SVG-down → Bambu-up)
+    │       read --quantization 0.05mm --single-layer → pagerotate --clockwise (CW 90°)
+    │            → scale -o 0 0 -- 1 -1 (Y flip; итог: gcode_x=y_svg+50.46, gcode_y=x_svg+87.9)
     │            → translate PAPER_ORIGIN_* (paper → nozzle frame)
     │            → по умолчанию в build.sh: --skip-linemerge (см. PDF_TO_PRINT_LINEMERGE); иначе linemerge 0.05mm
-    │            → сортировка путей: сверху вниз по строкам, в строке слева направо
+    │            → сортировка штрихов (axis=x): строки по убывающему gcode_X (верхняя первой),
+    │              внутри строки по min(gcode_Y) (левый край первым)
+    │            → ориентация вершин: каждая полилиния разворачивается левым концом вперёд
     │            → gwrite -p bambu_p1s_umts (см. templates/vpype_profile.toml)
     ▼
 build/gcode/page_NN.gcode (24 файла, ~5-7 MB каждый, чистые G0/G1+Z-hop, без headers)
@@ -119,17 +121,26 @@ Z_HOP = 15.0
 READ_QUANTIZATION = "0.05mm"
 LINEMERGE_TOLERANCE = "0.05mm"
 VPYPE_PROFILE = "bambu_p1s_umts"
-READING_SORT_INVERT_Y = True   # по умолчанию «верх тетради» первым; отключение: --no-invert-reading-sort или env 0
+READING_SORT_INVERT_Y = False  # irrelevant для оси x (default); только для force_axis="y"
 READING_ROW_GAP_BREAK_MM = 4.5
 READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False  # см. PDF_TO_PRINT_READING_AXIS_AUTO
 ```
 
+**Геометрия координат (корень сортировки):** после полной цепочки трансформов `pagerotate CW → scale 1 -1 → translate` получается:
+```
+gcode_x = 255.46 − y_svg   (строки текста → убывающий gcode_X; строка 1 сверху = наибольший X)
+gcode_y =  87.9  + x_svg   (лево-право → возрастающий gcode_Y; левый край = наименьший Y)
+```
+Поэтому **`--reading-force-axis x`** (ось по умолчанию): кластеризует строки по **gcode_X** (убывающий, верхняя строка первой), внутри строки сортирует по **min(gcode_Y) → mean(gcode_Y)** (левый конец первым). Если поменять ось обратно на `y` (legacy), кластеризация разрежет текст на вертикальные ломтики вместо горизонтальных строк — полный хаос.
+
+**Ориентация вершин:** после сортировки штрихов каждая открытая полилиния разворачивается так, чтобы её **левый конец** (меньший gcode_Y / imag) шёл первым. Скелетный трейсер обходит граф в произвольном направлении; без этого шага перо может рисовать каждый штрих справа налево.
+
 **Linemerge:** [`scripts/build.sh`](scripts/build.sh) по умолчанию добавляет **`--skip-linemerge`**, чтобы после скелетного трейса короткие сегменты не сливались в одну полилинию с произвольным порядком вершин (сортировка чтения переставляет только целые штрихи, не точки внутри линии). Вернуть слияние (меньше pen-up): **`PDF_TO_PRINT_LINEMERGE=1`**. Ручной запуск `svg_to_gcode.py` без `--skip-linemerge` по умолчанию оставляет linemerge включённым.
 
 **Порядок штрихов:** разрыв строк `READING_ROW_GAP_BREAK_MM` задаётся в **мм**; для геометрии vpype (внутренние единицы, px-like) порог переводится через `vp.convert_length`, для проверки по G-code используются те же мм без перевода — иначе кластеризация строк на генераторе и у валидатора расходятся.
 
-После трансформов скрипт **собирает все слои vpype в один** (порядок как в `gwrite` — обход `document.layers`), иначе сортировка «внутри каждого слоя» не совпадала бы с одним потоком в G-code. Далее **построчно**: кластеризация центроидов по **разрыву** вдоль оси строки (`READING_ROW_GAP_BREAK_MM`, переопределение: `--reading-row-gap-mm`, env `PDF_TO_PRINT_READING_ROW_GAP_MM` / legacy `PDF_TO_PRINT_READING_ROW_BUCKET_MM`). `read --single-layer` остаётся важен для единого SVG, но дальше по пайплайну слой всё равно может размножаться. **По умолчанию ось `y`:** строки — горизонтальные полосы на столе (сверху вниз); внутри строки порядок по ключам `(min(X), mean(X), mean(Y))`, чтобы при совпадающем min(X) после квантизации порядок не повторял случайный порядок трейса. Отключить «верх первым»: `--no-invert-reading-sort` или `PDF_TO_PRINT_READING_INVERT_Y=0`. Чтобы снова включить старый эвристический «auto» по размаху X/Y, задайте `--reading-force-axis auto` и `PDF_TO_PRINT_READING_AXIS_AUTO=1`. Явная колонка: `--reading-force-axis x` или env `PDF_TO_PRINT_READING_FORCE_AXIS=x`.
+После трансформов скрипт **собирает все слои vpype в один** (порядок как в `gwrite` — обход `document.layers`), иначе сортировка «внутри каждого слоя» не совпадала бы с одним потоком в G-code. Далее **построчно**: кластеризация центроидов по **разрыву** вдоль оси строки (`READING_ROW_GAP_BREAK_MM`, переопределение: `--reading-row-gap-mm`, env `PDF_TO_PRINT_READING_ROW_GAP_MM` / legacy `PDF_TO_PRINT_READING_ROW_BUCKET_MM`). `read --single-layer` остаётся важен для единого SVG, но дальше по пайплайну слой всё равно может размножаться. **По умолчанию ось `x`** (см. геометрию выше): переключить обратно на legacy-ось: `--reading-force-axis y` или `READING_FORCE_AXIS=y`. Чтобы снова включить старый эвристический «auto» по размаху X/Y, задайте `--reading-force-axis auto` и `PDF_TO_PRINT_READING_AXIS_AUTO=1`.
 
 **Проверка G-code:** [`scripts/validate_reading_order_gcode.py`](scripts/validate_reading_order_gcode.py) — восстанавливает каждый штрих как полилинию (цель `G0` первой вершины + все `G1 XY` до подъёма пера), затем сверяет порядок с тем же алгоритмом permutation, что и vpype; флаг **`--strict`** дополнительно проверяет монотонность полос и порядок внутри строки. Дымовый прогон без PDF: [`scripts/e2e_reading_order_pipeline.py`](scripts/e2e_reading_order_pipeline.py). `./scripts/build.sh` выполняет e2e (Phase 0), затем после генерации страниц — **`--strict` для каждого `build/gcode/page_*.gcode`** (Phase 2b); при ошибке сборка не доходит до merge.
 
@@ -141,8 +152,8 @@ READING_ROW_AXIS_AUTO = False  # см. PDF_TO_PRINT_READING_AXIS_AUTO
 
 **Почему такой transform**:
 - SVG: portrait 165×205 mm, Y down (top of page = Y=0)
-- `pagerotate` (CCW): становится 205×165 landscape, content повёрнут
-- `scale -o 0 0 -- 1 -1`: Y инвертирован относительно (0,0). Pen-frame Y up.
+- `pagerotate --clockwise` (CW 90°): становится 205×165 landscape; в vpype (Y up) формула: new_x = y_portrait, new_y = W - x_portrait
+- `scale -o 0 0 -- 1 -1`: Y инвертирован относительно (0,0). Итог: gcode_x = y_portrait + 50.46, gcode_y = x_svg + 87.9
 - `translate` на `PAPER_ORIGIN_*`: content в области бумаги в координатах сопла (см. скрипт)
 
 Bounds итогового G-code (pen-frame): X≈28.6..221, Y≈57..211 — внутри paper и UMTS safe zone.

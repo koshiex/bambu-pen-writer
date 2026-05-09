@@ -53,7 +53,7 @@ def strict_geometry_checks(
     Matches ``reading_order_permutation_from_lines`` (including stable tie-break by stroke index).
     """
     n = len(arrays)
-    rows_along_y, row_id, min_x, mean_x, mean_y_c = reading_row_metadata_from_lines(
+    rows_along_y, row_id, min_x, mean_x, mean_y_c, min_y_c = reading_row_metadata_from_lines(
         arrays,
         invert_y=invert_y,
         row_gap_mm=row_gap_mm,
@@ -78,18 +78,18 @@ def strict_geometry_checks(
                 k,
             )
         else:
+            # Matches reading_order_permutation_from_lines rows_along_y=False branch:
+            # (-min_y_c, -mean_y_c, i) — descending Y = high-Y (left) first.
             prev_k = (
                 int(row_id[k - 1]),
+                float(-min_y_c[k - 1]),
                 float(-mean_y_c[k - 1]),
-                float(mean_x[k - 1]),
-                float(min_x[k - 1]),
                 k - 1,
             )
             curr_k = (
                 int(row_id[k]),
+                float(-min_y_c[k]),
                 float(-mean_y_c[k]),
-                float(mean_x[k]),
-                float(min_x[k]),
                 k,
             )
         if prev_k > curr_k:
@@ -111,8 +111,8 @@ def main() -> None:
     parser.add_argument(
         "--reading-force-axis",
         choices=("auto", "y", "x"),
-        default="y",
-        help="must match svg_to_gcode run (default y)",
+        default="x",
+        help="must match svg_to_gcode run (default x — portrait→landscape layout)",
     )
     parser.add_argument(
         "--strict",
@@ -137,7 +137,7 @@ def main() -> None:
         print(f"OK ({n} strokes, nothing to order-check)")
         raise SystemExit(0)
 
-    rows_along_y, _, _, _, _ = reading_row_metadata_from_lines(
+    rows_along_y, _, _, _, _, _ = reading_row_metadata_from_lines(
         arrays,
         invert_y=invert_y,
         row_gap_mm=gap,

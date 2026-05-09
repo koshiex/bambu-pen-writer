@@ -80,7 +80,7 @@ LINEMERGE_TOLERANCE = "0.05mm"
 # Stroke order: row-major — see apply_reading_order_sort().
 # True = smaller machine Y first after transforms (typical “top of notebook first” on P1S + UMTS).
 # If your bed/paper frame needs the opposite, set READING_SORT_INVERT_Y=False or PDF_TO_PRINT_READING_INVERT_Y=0.
-READING_SORT_INVERT_Y = True
+READING_SORT_INVERT_Y = False  # irrelevant for force_axis="x" (default); kept for force_axis="y" mode
 # New row when consecutive stroke centroids differ by more than this along the row axis (mm).
 # Clustering uses centroids in gwrite-equivalent mm (see reading_stroke_metrics).
 READING_ROW_GAP_BREAK_MM = 4.5
@@ -125,9 +125,10 @@ def reading_stroke_metrics(
     arrays: list[np.ndarray],
     *,
     coords_are_mm: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Centroids and min/mean X in gwrite-equivalent mm (matches validator on page G-code)."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Centroids and min/mean X, min Y in gwrite-equivalent mm (matches validator on page G-code)."""
     min_x: list[float] = []
+    min_y: list[float] = []
     mean_x: list[float] = []
     mean_y: list[float] = []
     cx: list[float] = []
@@ -135,6 +136,7 @@ def reading_stroke_metrics(
     for a in arrays:
         xr, yi = reading_vertex_xy_mm_rounded(a, coords_are_mm=coords_are_mm)
         min_x.append(float(np.min(xr)))
+        min_y.append(float(np.min(yi)))
         mean_x.append(float(np.mean(xr)))
         my = float(np.mean(yi))
         mean_y.append(my)
@@ -146,6 +148,7 @@ def reading_stroke_metrics(
         np.asarray(min_x),
         np.asarray(mean_x),
         np.asarray(mean_y),
+        np.asarray(min_y),
     )
 
 
@@ -273,23 +276,28 @@ def reading_row_metadata_from_lines(
     row_gap_mm: float,
     force_axis: str | None = None,
     coords_are_mm: bool = False,
-) -> tuple[bool, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return rows_along_y, row_id, and min/mean X and mean Y per stroke in gwrite-equivalent mm.
+) -> tuple[bool, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return rows_along_y, row_id, and min/mean X, mean Y, min Y per stroke in gwrite-equivalent mm.
 
     coords_are_mm: True when arrays come from G-code (mm); False for vpype Document lines (px).
+
+    Geometry for portrait→landscape (pagerotate CW + scale 1 -1 + translate):
+      gcode_x = 255.46 − y_svg  →  text rows lie along X (descending X = top-to-bottom)
+      gcode_y = x_svg  +  87.9  →  left-right within row lies along Y (ascending Y = left→right)
+    Therefore force_axis="x" is the correct default for this printer layout.
     """
     n = len(arrays)
     row_id = np.zeros(max(n, 1), dtype=int)
     if n == 0:
         z = np.zeros(0)
-        return True, row_id[:0], z, z, z
+        return True, row_id[:0], z, z, z, z
     if n == 1:
-        _, _, min_x, mean_x, mean_y_c = reading_stroke_metrics(
+        _, _, min_x, mean_x, mean_y_c, min_y_c = reading_stroke_metrics(
             arrays, coords_are_mm=coords_are_mm
         )
-        return True, row_id[:1], min_x, mean_x, mean_y_c
+        return True, row_id[:1], min_x, mean_x, mean_y_c, min_y_c
 
-    cx, cy, min_x, mean_x, mean_y_c = reading_stroke_metrics(
+    cx, cy, min_x, mean_x, mean_y_c, min_y_c = reading_stroke_metrics(
         arrays, coords_are_mm=coords_are_mm
     )
     rows_along_y = reading_rows_along_y_decision(cx, cy, force_axis=force_axis)
@@ -305,10 +313,11 @@ def reading_row_metadata_from_lines(
             ascending = False
         row_id = _assign_row_ids_gap(cy, sorted_idx, gap, ascending=ascending)
     else:
-        sorted_idx = np.argsort(cx)
-        row_id = _assign_row_ids_gap(cx, sorted_idx, gap, ascending=True)
+        # Rows along X: descending cx → row_id=0 at largest cx = top text row first.
+        sorted_idx = np.argsort(-cx)
+        row_id = _assign_row_ids_gap(cx, sorted_idx, gap, ascending=False)
 
-    return rows_along_y, row_id, min_x, mean_x, mean_y_c
+    return rows_along_y, row_id, min_x, mean_x, mean_y_c, min_y_c
 
 
 def reading_order_permutation_from_lines(
@@ -319,12 +328,18 @@ def reading_order_permutation_from_lines(
     force_axis: str | None = None,
     coords_are_mm: bool = False,
 ) -> np.ndarray:
-    """Return indices such that arrays[i] in returned order is reading order (row-major)."""
+    """Return indices such that arrays[i] in returned order is reading order (row-major).
+
+    rows_along_y=True  (force_axis="y"): rows by ascending/descending Y bands, within row by X.
+    rows_along_y=False (force_axis="x"): rows by descending X bands (top first), within row by
+        ascending Y (left→right). This matches the portrait→landscape printer geometry where
+        gcode_x encodes the text row and gcode_y encodes left-right position.
+    """
     n = len(arrays)
     if n < 2:
         return np.arange(n)
 
-    rows_along_y, row_id, min_x, mean_x, mean_y_c = reading_row_metadata_from_lines(
+    rows_along_y, row_id, min_x, mean_x, mean_y_c, min_y_c = reading_row_metadata_from_lines(
         arrays,
         invert_y=invert_y,
         row_gap_mm=row_gap_mm,
@@ -338,11 +353,16 @@ def reading_order_permutation_from_lines(
             for i in range(n)
         ]
     else:
+        # Within each X-band row: descending Y (largest min_y_c first) = left-to-right.
+        # In the portrait→landscape layout, high gcode_Y is the left side of the text line.
+        # Negating produces descending order when sorted ascending.
+        # Final tiebreak is integer index i — avoids float px↔mm rounding inconsistency
+        # between apply_reading_order_sort (coords_are_mm=False) and the G-code validator.
         decorated = [
-            (int(row_id[i]), -mean_y_c[i], mean_x[i], min_x[i], i)
+            (int(row_id[i]), -min_y_c[i], -mean_y_c[i], i)
             for i in range(n)
         ]
-    decorated.sort(key=lambda t: (t[0], t[1], t[2], t[3], t[4]))
+    decorated.sort()
     return np.array([t[-1] for t in decorated], dtype=int)
 
 
@@ -418,6 +438,28 @@ def assert_document_is_reading_sorted(
             )
 
 
+def _orient_strokes_left_to_right(doc: vp.Document) -> None:
+    """Reverse open polylines whose right end (higher imag = gcode_y) comes first.
+
+    After the portrait→landscape transform, gcode_y encodes left-right position
+    (left edge ≈ 88 mm, right edge ≈ 253 mm). The skeleton tracer produces polylines
+    with arbitrary vertex direction; this step ensures each open stroke starts at the
+    left (lower imag) end so the pen draws left-to-right.
+
+    Closed polylines (first == last vertex) are left unchanged.
+    """
+    for lid, lc in list(doc.layers.items()):
+        oriented = []
+        for ln in lc.lines:
+            a = np.asarray(ln, dtype=np.complex128)
+            if len(a) >= 2 and a[0].imag != a[-1].imag:  # open polyline
+                # High gcode_Y = left side of text; ensure high-Y end comes first (left→right).
+                if a[0].imag < a[-1].imag:
+                    a = a[::-1]
+            oriented.append(a)
+        doc.layers[lid] = vp.LineCollection(lines=oriented, metadata=lc.metadata)
+
+
 def convert_one(
     svg: Path,
     out: Path,
@@ -463,6 +505,7 @@ def convert_one(
     merge_all_layers_to_layer_one(doc)
     apply_reading_order_sort(doc, invert_y=invert_y, row_gap_mm=gap_mm, force_axis=axis)
     assert_document_is_reading_sorted(doc, invert_y=invert_y, row_gap_mm=gap_mm, force_axis=axis)
+    _orient_strokes_left_to_right(doc)
     execute(f"gwrite -p {VPYPE_PROFILE} {qout}", document=doc)
 
     n_vpype = _document_line_count(doc)
@@ -507,8 +550,11 @@ def main() -> None:
     parser.add_argument(
         "--reading-force-axis",
         choices=("auto", "y", "x"),
-        default="y",
-        help="stroke row axis: y=horizontal lines on bed (default), x=columns, auto=see PDF_TO_PRINT_READING_AXIS_AUTO",
+        default="x",
+        help=(
+            "stroke row axis: x=rows along gcode_X (portrait→landscape default; top-first, left-right), "
+            "y=rows along gcode_Y (legacy), auto=see PDF_TO_PRINT_READING_AXIS_AUTO"
+        ),
     )
     args = parser.parse_args()
 

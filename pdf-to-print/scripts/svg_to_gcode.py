@@ -67,10 +67,11 @@ PAPER_ORIGIN_Y = f"{PAPER_FRONT + PAPER_H - PEN_OFFSET_Y}mm"  # 252.9
 # Critical: raw G-code we generate uses absolute Z values in NOZZLE frame.
 # When pen touches paper, nozzle is at Z = Z_PEN_DOWN above bed.
 # When pen lifts (Z-hop), nozzle is at Z = Z_PEN_DOWN + Z_HOP.
-# Source: UMTS docs §Z-Offset: +17 Stabilo, +20 POSCA. Xiaomi gel ≈ +18 (between).
-# Calibrate live (Test 3 of operator-manual.md) and update here.
-Z_PEN_DOWN = 18.0
-Z_HOP = 15.0
+# Source: UMTS docs (docs/umts-p1s-pen.md): Orca Z-offset +17 mm Stabilo, +20 mm POSCA — baked here as absolute nozzle Z.
+# Thin school notebook (~7 mm spine vs thicker pads): top sheet sits lower → slightly raise nozzle vs old 18 mm default.
+# Calibrate live (Test 3 in docs/operator-manual.md): too faint → lower Z_PEN_DOWN; too much drag → raise it.
+Z_PEN_DOWN = 40.7
+Z_HOP = 12.0
 
 VPYPE_PROFILE = "bambu_p1s_umts"
 # Curve linearization on SVG import (vpype read --quantization). Finer = more vertices / larger G-code.
@@ -87,7 +88,9 @@ STROKE_MIN_LENGTH_MM = 0.3
 READING_SORT_INVERT_Y = False  # irrelevant for force_axis="x" (default); kept for force_axis="y" mode
 # New row when consecutive stroke centroids differ by more than this along the row axis (mm).
 # Clustering uses centroids in gwrite-equivalent mm (see reading_stroke_metrics).
-READING_ROW_GAP_BREAK_MM = 4.5
+# Dense/fine text often has line spacing < ~4 mm; 4.5 mm merged rows into one left→right sweep.
+# Override: PDF_TO_PRINT_READING_ROW_GAP_MM or --reading-row-gap-mm (try 2.0–3.0 if rows still merge).
+READING_ROW_GAP_BREAK_MM = 2.5
 # Legacy heuristic (only when PDF_TO_PRINT_READING_AXIS_AUTO=1 and axis is "auto"):
 # if range_y < range_x * ratio, treat strokes as vertical bands (column-major).
 READING_ROW_AXIS_RATIO = 0.45
@@ -96,12 +99,19 @@ READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False
 
 # XY feed for pen-down moves (G1 … X Y F…). Marlin/Bambu use mm/min → mm/s × 60.
-DRAW_SPEED_MM_S = 50.0
+DRAW_SPEED_MM_S = 400.0
 DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
 
 # Must match gwrite `{{x:.3f}}` / `{{y:.3f}}` in write_vpype_profile() so sort keys match
 # `validate_reading_order_gcode` (parsed G-code uses the same precision).
 READING_SORT_KEY_DECIMALS = 3
+# min/mean after vertex rounding still pick up float noise (e.g. -213.276 vs -213.27599999999998).
+READING_SORT_AGG_DECIMALS = 6
+
+
+def _quantize_reading_sort_float(x: float) -> float:
+    """Stable lex keys + row clustering vs generator vs validator."""
+    return round(float(x), READING_SORT_AGG_DECIMALS)
 
 
 def _mm_per_internal_unit() -> float:
@@ -139,12 +149,13 @@ def reading_stroke_metrics(
     cy: list[float] = []
     for a in arrays:
         xr, yi = reading_vertex_xy_mm_rounded(a, coords_are_mm=coords_are_mm)
-        min_x.append(float(np.min(xr)))
-        min_y.append(float(np.min(yi)))
-        mean_x.append(float(np.mean(xr)))
-        my = float(np.mean(yi))
+        min_x.append(_quantize_reading_sort_float(float(np.min(xr))))
+        min_y.append(_quantize_reading_sort_float(float(np.min(yi))))
+        mx = _quantize_reading_sort_float(float(np.mean(xr)))
+        my = _quantize_reading_sort_float(float(np.mean(yi)))
+        mean_x.append(mx)
         mean_y.append(my)
-        cx.append(float(np.mean(xr)))
+        cx.append(mx)
         cy.append(my)
     return (
         np.asarray(cx),

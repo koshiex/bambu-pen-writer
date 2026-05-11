@@ -88,11 +88,11 @@ Orca → **Device** tab → **+** → ввести:
 
 #### B) Z-offset — НЕ настраивается в Orca
 
-Z-offset запекается в **наш gcode** через константу `Z_PEN_DOWN` в `scripts/svg_to_gcode.py` (по умолчанию 18.0 мм). Калибровка Test 3 (см. §2) даёт финальное значение → правишь константу → перегенерируешь:
+Z-offset запекается в **наш gcode** через константу `Z_PEN_DOWN` в `scripts/svg_to_gcode.py` (по умолчанию 18.7 мм — старт для Stabilo и тонкой тетради; см. комментарий в файле). Калибровка Test 3 (см. §2) даёт финальное значение → правишь константу → перегенерируешь:
 
 ```bash
 # В scripts/svg_to_gcode.py поменять:
-#   Z_PEN_DOWN = 18.0  →  Z_PEN_DOWN = <откалиброванное>
+#   Z_PEN_DOWN = 18.7  →  Z_PEN_DOWN = <откалиброванное>
 ./scripts/build.sh
 ```
 
@@ -113,7 +113,7 @@ Z-offset запекается в **наш gcode** через константу 
 Полностью не нужно. Все эти параметры выражены литералами внутри `output/notebook.gcode`:
 - `M104 S180` / `M109 S180` — nozzle temp (в start G-code)
 - `M106 S0` × 3 — все вентиляторы выключены
-- `G1 Z18` / `G1 Z33` — pen-down / Z-hop с baked Z-offset (при `Z_PEN_DOWN=18`, `Z_HOP=15` в `svg_to_gcode.py`; см. актуальные числа в генерируемом G-code)
+- `G1 Z<Z_PEN_DOWN>` / `G1 Z<Z_PEN_DOWN+Z_HOP>` — pen-down / Z-hop (актуальные мм в `scripts/svg_to_gcode.py` и в сгенерированном gcode)
 - `F12000` / `F18000` — скорости draw/travel
 - Layer height, line width, XY compensation, retraction, perimeters — всё уже было применено vpype-ом при генерации траекторий
 
@@ -246,7 +246,7 @@ cp output/calibration.gcode /Volumes/<sd>/    # на SD
 # Бледно → уменьшить Z_PEN_DOWN (ручка глубже в стол)
 # Сильно давит → увеличить Z_PEN_DOWN (ручка выше)
 # В scripts/svg_to_gcode.py:
-#   Z_PEN_DOWN = 18.0  →  17.5  (бледно) или 18.5 (давит)
+#   Z_PEN_DOWN = 18.7  →  17.5  (бледно) или 19.0  (давит)
 python3 scripts/calibration_gcode.py --z-down 17.5
 cp output/calibration.gcode /Volumes/<sd>/
 ```
@@ -426,7 +426,7 @@ python3 scripts/merge_pages.py --minutes-per-page 20
 |---|---|
 | `M400 U1` пауза не срабатывает (принтер просто продолжает) | См. §5.1 — fallback на `M0` |
 | Линии бледные или нет рисунка | Z-offset слишком большой → уменьшить (например 18 → 17.5) или вставить ручку глубже |
-| Давит сильно, чернила размазаны | Z-offset слишком мал → увеличить (18 → 18.5) или вытащить ручку |
+| Давит сильно, чернила размазаны | Z-offset слишком мал → увеличить (например 18.7 → 19.0) или вытащить ручку |
 | Ручка тащит чернила во время travel | Z-hop не работает → проверить `Retraction = 0.01 мм` в Orca, `Z-hop = 3 мм Normal` |
 | Тетрадь сдвинулась после паузы | Слабая фиксация → больше магнитов, проверить плоскость магнитного листа, не открывать дверцу резко |
 | Игнорирует тонкие линии | В Orca включить Arachne, `Wall min ≈ 0.2 мм` |

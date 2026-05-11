@@ -116,14 +116,14 @@ Inkscape экспортирует SVG width/height без unit (user units = px 
 Главный конвертер. Запускает vpype для каждого SVG. Параметры в начале файла (реальные имена — в [`scripts/svg_to_gcode.py`](scripts/svg_to_gcode.py)):
 ```python
 PAPER_ORIGIN_X / PAPER_ORIGIN_Y   # из PAPER_* и PEN_OFFSET_* (nozzle frame)
-Z_PEN_DOWN = 18.0
+Z_PEN_DOWN = 18.7
 Z_HOP = 15.0
 READ_QUANTIZATION = "0.05mm"
 LINEMERGE_TOLERANCE = "0.05mm"
 STROKE_MIN_LENGTH_MM = 0.3  # filter --min-length: убирает 1-3px артефакты скелета (< 0.25mm)
 VPYPE_PROFILE = "bambu_p1s_umts"
 READING_SORT_INVERT_Y = False  # irrelevant для оси x (default); только для force_axis="y"
-READING_ROW_GAP_BREAK_MM = 4.5
+READING_ROW_GAP_BREAK_MM = 2.5
 READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False  # см. PDF_TO_PRINT_READING_AXIS_AUTO
 ```
@@ -141,7 +141,7 @@ gcode_y =  87.9  + x_svg   (лево-право → возрастающий gco
 
 **Linemerge:** включён по умолчанию в `build.sh` — склеивает смежные сегменты (меньше pen-up, дополнительно поглощает шумные стыки). Отключить: `PDF_TO_PRINT_SKIP_LINEMERGE=1`. Ручной запуск `svg_to_gcode.py --skip-linemerge` тоже работает.
 
-**Порядок штрихов:** разрыв строк `READING_ROW_GAP_BREAK_MM` задаётся в **мм**; для геометрии vpype (внутренние единицы, px-like) порог переводится через `vp.convert_length`, для проверки по G-code используются те же мм без перевода — иначе кластеризация строк на генераторе и у валидатора расходятся.
+**Порядок штрихов:** разрыв строк `READING_ROW_GAP_BREAK_MM` задаётся в **мм** на уже переведённых в мм центроидах (`reading_stroke_metrics`); генератор и валидатор используют один и тот же порог.
 
 После трансформов скрипт **собирает все слои vpype в один** (порядок как в `gwrite` — обход `document.layers`), иначе сортировка «внутри каждого слоя» не совпадала бы с одним потоком в G-code. Далее **построчно**: кластеризация центроидов по **разрыву** вдоль оси строки (`READING_ROW_GAP_BREAK_MM`, переопределение: `--reading-row-gap-mm`, env `PDF_TO_PRINT_READING_ROW_GAP_MM` / legacy `PDF_TO_PRINT_READING_ROW_BUCKET_MM`). `read --single-layer` остаётся важен для единого SVG, но дальше по пайплайну слой всё равно может размножаться. **По умолчанию ось `x`** (см. геометрию выше): переключить обратно на legacy-ось: `--reading-force-axis y` или `READING_FORCE_AXIS=y`. Чтобы снова включить старый эвристический «auto» по размаху X/Y, задайте `--reading-force-axis auto` и `PDF_TO_PRINT_READING_AXIS_AUTO=1`.
 

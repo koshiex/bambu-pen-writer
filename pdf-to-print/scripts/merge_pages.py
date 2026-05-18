@@ -31,7 +31,7 @@ Templates:
 
 Usage:
   python3 scripts/merge_pages.py [--gcode-dir DIR] [--templates-dir DIR] [--out PATH]
-                                 [--minutes-per-page MIN]
+                                 [--minutes-per-page MIN] [--page-order sequential|spread]
 """
 
 from __future__ import annotations
@@ -40,6 +40,12 @@ import argparse
 import re
 import sys
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from page_order import page_num_from_path, page_paths  # noqa: E402
 
 
 def read(path: Path) -> str:
@@ -101,6 +107,12 @@ def main() -> None:
     parser.add_argument("--out", default="output/notebook.gcode")
     parser.add_argument("--minutes-per-page", type=int, default=15,
                         help="rough estimate per page for M73 remaining-time")
+    parser.add_argument(
+        "--page-order",
+        choices=("sequential", "spread"),
+        default="sequential",
+        help="merge order: sequential (PDF 1..N) or spread (unfolded 24-page signature)",
+    )
     args = parser.parse_args()
 
     gcode_dir = Path(args.gcode_dir)
@@ -108,10 +120,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pages = sorted(gcode_dir.glob("page_*.gcode"))
-    if not pages:
-        sys.exit(f"ERROR: no page_*.gcode in {gcode_dir}")
-
+    pages = page_paths(gcode_dir, args.page_order)
     n = len(pages)
     mpp = args.minutes_per_page
     total_min = n * mpp
@@ -126,7 +135,11 @@ def main() -> None:
     end = read(tpl_dir / "bambu_end.gcode")
     pause_tpl = read(tpl_dir / "page_pause.gcode")
 
-    print(f"Merging {n} pages -> {out_path} (~{mpp} min/page, est {total_min} min total)")
+    order_label = "spread (unfolded signature)" if args.page_order == "spread" else "sequential"
+    print(
+        f"Merging {n} pages -> {out_path} "
+        f"(order={order_label}, ~{mpp} min/page, est {total_min} min total)"
+    )
 
     with out_path.open("w") as out:
         # Bambu HEADER + CONFIG (firmware-required, verbatim from real Bambu file)
@@ -146,7 +159,8 @@ def main() -> None:
 
         # Per-page content
         for i, page in enumerate(pages, start=1):
-            out.write(f";===== PAGE {i:02d} =====\n")
+            page_num = page_num_from_path(page)
+            out.write(f";===== PAGE {page_num:02d} =====\n")
             out.write(layer_marker(i))
             page_progress = int((i - 1) / n * 100)
             page_remaining = (n - i + 1) * mpp
@@ -154,10 +168,11 @@ def main() -> None:
             out.write(page.read_text())
 
             if i < n:
+                next_page_num = page_num_from_path(pages[i])
                 next_progress = int(i / n * 100)
                 next_remaining = (n - i) * mpp
                 pause = pause_tpl
-                pause = pause.replace("{NEXT_PAGE}", f"{i+1:02d}")
+                pause = pause.replace("{NEXT_PAGE}", f"{next_page_num:02d}")
                 pause = pause.replace("{PROGRESS}", str(next_progress))
                 pause = pause.replace("{REMAINING}", str(next_remaining))
                 out.write(pause)

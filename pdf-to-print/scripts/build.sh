@@ -5,6 +5,8 @@
 #   $1 = path to PDF (default: pdfs/2.pdf)
 #   $2 = output G-code path (default: output/notebook.gcode)
 #   $3 = optional extract mode: "raster" (default) or "vector"
+#   $4 = optional page order: "sequential" (default) or "spread" (unfolded signature)
+# Env: PDF_TO_PRINT_PAGE_ORDER=spread (same as $4)
 #
 # Raster phase-1 (PDF→PNG→potrace→SVG) avoids duplicate TTF outline contours.
 # Env: EXTRACT_MODE=vector | USE_VECTOR_EXTRACT=1 → inkscape vector extract.
@@ -48,6 +50,18 @@ if [[ -n "${3:-}" ]]; then
   esac
 fi
 
+PAGE_ORDER="${PDF_TO_PRINT_PAGE_ORDER:-sequential}"
+if [[ -n "${4:-}" ]]; then
+  case "$4" in
+    sequential) PAGE_ORDER=sequential ;;
+    spread) PAGE_ORDER=spread ;;
+    *)
+      echo "ERROR: fourth arg must be 'sequential' or 'spread', got: $4" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -84,24 +98,42 @@ echo ">>> Phase 2: SVG -> per-page G-code (reading-order: axis=${READING_FORCE_A
 python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}"
 
 echo ""
-echo ">>> Phase 2b: validate reading order (all pages, strict)"
-shopt -s nullglob
-GCODE_PAGES=(build/gcode/page_*.gcode)
-if [[ ${#GCODE_PAGES[@]} -eq 0 ]]; then
-  echo "ERROR: no build/gcode/page_*.gcode after Phase 2" >&2
-  exit 1
-fi
-for g in "${GCODE_PAGES[@]}"; do
-  python3 scripts/validate_reading_order_gcode.py --strict --quiet "${READING_OPTS[@]}" "$g" || {
-    echo "ERROR: reading-order validation failed: $g (re-run without --quiet for details)" >&2
-    exit 1
-  }
+EXPERIMENTAL_OFF=1
+for _exp_var in \
+  PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_PRESSURE \
+  PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_FEEDRATE \
+  PDF_TO_PRINT_EXPERIMENTAL_STRIKETHROUGH; do
+  case "${!_exp_var:-}" in
+    1|true|yes|on) EXPERIMENTAL_OFF=0 ;;
+  esac
 done
-echo "  OK: ${#GCODE_PAGES[@]} page(s) passed reading-order + strict geometry checks"
+if [[ "${EXPERIMENTAL_OFF}" == "0" ]]; then
+  echo ">>> Phase 2b: SKIP strict reading-order validation (experimental post-process adds extra strokes)"
+else
+  echo ">>> Phase 2b: validate reading order (all pages, strict)"
+  shopt -s nullglob
+  GCODE_PAGES=(build/gcode/page_*.gcode)
+  if [[ ${#GCODE_PAGES[@]} -eq 0 ]]; then
+    echo "ERROR: no build/gcode/page_*.gcode after Phase 2" >&2
+    exit 1
+  fi
+  for g in "${GCODE_PAGES[@]}"; do
+    python3 scripts/validate_reading_order_gcode.py --strict --quiet "${READING_OPTS[@]}" "$g" || {
+      echo "ERROR: reading-order validation failed: $g (re-run without --quiet for details)" >&2
+      exit 1
+    }
+  done
+  echo "  OK: ${#GCODE_PAGES[@]} page(s) passed reading-order + strict geometry checks"
+fi
 
 echo ""
-echo ">>> Phase 3: merging pages with wrappers"
-python3 scripts/merge_pages.py --gcode-dir build/gcode --templates-dir templates --out "$OUT"
+if [[ "$PAGE_ORDER" == "spread" ]]; then
+  echo ">>> Phase 3: merging pages (page order: spread — unfolded signature)"
+else
+  echo ">>> Phase 3: merging pages (page order: sequential)"
+fi
+python3 scripts/merge_pages.py --gcode-dir build/gcode --templates-dir templates --out "$OUT" \
+  --page-order "$PAGE_ORDER"
 
 echo ""
 echo "✅ DONE: $OUT"

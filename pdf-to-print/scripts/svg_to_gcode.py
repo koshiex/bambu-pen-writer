@@ -36,6 +36,13 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 from gcode_stroke_parse import parse_stroke_polylines  # noqa: E402
+from gcode_experimental import (  # noqa: E402
+    ExperimentalFlags,
+    any_experimental_enabled,
+    apply_experimental_postprocess,
+    resolve_experimental_flags,
+    resolve_experimental_params,
+)
 
 # Pen offset relative to nozzle (firmware coords). Pen is shifted toward bed
 # origin (0, 0) from nozzle position. Measured with caliper:
@@ -498,6 +505,7 @@ def convert_one(
     reading_row_gap_mm: float | None = None,
     reading_force_axis: str | None = None,
     stroke_min_length_mm: float | None = None,
+    experimental_flags: ExperimentalFlags | None = None,
 ) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     invert_y = resolve_reading_invert_y(
@@ -546,6 +554,21 @@ def convert_one(
         raise RuntimeError(
             f"{out.name}: parsed G-code strokes ({len(strokes_parsed)}) != vpype lines ({n_vpype}) "
             "— check gcode_stroke_parse or stray non-vpype commands in the file"
+        )
+
+    flags = experimental_flags if experimental_flags is not None else resolve_experimental_flags()
+    if any_experimental_enabled(flags):
+        apply_experimental_postprocess(
+            out,
+            z_pen=Z_PEN_DOWN,
+            z_up=Z_PEN_DOWN + Z_HOP,
+            base_feed_mm_min=float(DRAW_FEED_MM_MIN),
+            base_speed_mm_s=DRAW_SPEED_MM_S,
+            flags=flags,
+            params=resolve_experimental_params(),
+            reading_row_gap_mm=gap_mm,
+            reading_force_axis=axis,
+            invert_reading_sort=invert_y,
         )
 
 
@@ -599,6 +622,21 @@ def main() -> None:
             "artifacts (env PDF_TO_PRINT_STROKE_MIN_LENGTH_MM, default 0.3). Set 0 to disable."
         ),
     )
+    parser.add_argument(
+        "--experimental-variable-pressure",
+        action="store_true",
+        help="post-process: variable pen Z along strokes (env PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_PRESSURE)",
+    )
+    parser.add_argument(
+        "--experimental-variable-feedrate",
+        action="store_true",
+        help="post-process: variable F from synthetic timing (env PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_FEEDRATE)",
+    )
+    parser.add_argument(
+        "--experimental-strikethrough",
+        action="store_true",
+        help="post-process: jitter word clusters + strikethrough (env PDF_TO_PRINT_EXPERIMENTAL_STRIKETHROUGH)",
+    )
     args = parser.parse_args()
 
     svg_dir = Path(args.svg_dir)
@@ -615,6 +653,11 @@ def main() -> None:
         out = out_dir / (svg.stem + ".gcode")
         print(f"  {svg.name} -> {out.name}")
         fa = None if args.reading_force_axis == "auto" else args.reading_force_axis
+        exp_flags = resolve_experimental_flags(
+            cli_pressure=args.experimental_variable_pressure,
+            cli_feedrate=args.experimental_variable_feedrate,
+            cli_strikethrough=args.experimental_strikethrough,
+        )
         convert_one(
             svg,
             out,
@@ -624,6 +667,7 @@ def main() -> None:
             reading_row_gap_mm=args.reading_row_gap_mm,
             reading_force_axis=fa,
             stroke_min_length_mm=args.stroke_min_length_mm,
+            experimental_flags=exp_flags,
         )
 
     total_size = sum(p.stat().st_size for p in out_dir.glob("page_*.gcode"))

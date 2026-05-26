@@ -1,6 +1,7 @@
 pdfs/*
 build/
 output/
+.vpype.generated.toml
 .DS_Store
 *.pyc
 __pycache__/

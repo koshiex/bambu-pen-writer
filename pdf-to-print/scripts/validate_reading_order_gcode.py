@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -31,9 +32,9 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 from gcode_stroke_parse import parse_stroke_polylines  # noqa: E402
+import svg_to_gcode as plotter  # noqa: E402
 from svg_to_gcode import (  # noqa: E402
-    Z_HOP,
-    Z_PEN_DOWN,
+    apply_holder_profile,
     _effective_reading_row_gap_mm,
     reading_order_permutation_from_lines,
     reading_row_metadata_from_lines,
@@ -103,7 +104,17 @@ def strict_geometry_checks(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gcode", type=Path, help="page_NN.gcode from svg_to_gcode")
-    parser.add_argument("--z-pen-down", type=float, default=Z_PEN_DOWN)
+    parser.add_argument(
+        "--soft-holder",
+        action="store_true",
+        help="match svg_to_gcode --soft-holder Z defaults (env PDF_TO_PRINT_SOFT_HOLDER)",
+    )
+    parser.add_argument(
+        "--z-pen-down",
+        type=float,
+        default=None,
+        help="pen-down Z for stroke parse (default: active holder profile)",
+    )
     inv = parser.add_mutually_exclusive_group()
     inv.add_argument("--invert-reading-sort", action="store_true")
     inv.add_argument("--no-invert-reading-sort", action="store_true")
@@ -122,6 +133,12 @@ def main() -> None:
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
+    soft_holder = args.soft_holder or os.environ.get(
+        "PDF_TO_PRINT_SOFT_HOLDER", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    apply_holder_profile(soft_holder=soft_holder)
+    z_pen_down = plotter.Z_PEN_DOWN if args.z_pen_down is None else args.z_pen_down
+
     gap = _effective_reading_row_gap_mm(args.reading_row_gap_mm)
     fa = None if args.reading_force_axis == "auto" else args.reading_force_axis
 
@@ -130,8 +147,8 @@ def main() -> None:
         cli_no_invert=args.no_invert_reading_sort,
     )
 
-    z_up = args.z_pen_down + Z_HOP
-    arrays = parse_stroke_polylines(args.gcode, args.z_pen_down, z_up)
+    z_up = z_pen_down + plotter.Z_HOP
+    arrays = parse_stroke_polylines(args.gcode, z_pen_down, z_up)
     n = len(arrays)
     if n < 2:
         print(f"OK ({n} strokes, nothing to order-check)")

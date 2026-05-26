@@ -42,17 +42,15 @@ M221 X0 Y0 Z0             ; turn off X/Y/Z soft endstops
 
 ;===== home all axes =================
 G28                       ; home XYZ
-G1 Z50 F600               ; raise Z high — clearance for module install + over notebook
+G1 Z{Z_TRAVEL_CLEARANCE} F{Z_TRAVEL_FEED}               ; raise Z — clearance for module install + over notebook
 
 ;===== heat nozzle to 180°C (prevents cold extrusion error) =================
 M104 S180                 ; nozzle target 180
 M109 S180                 ; wait for nozzle to reach 180
 
-;===== UMTS install pause: load module with pen now =================
-; Park at rear-center (Y=200) — operator reaches notebook through front door,
-; head out of the way at rear. Y=20 (front) was hitting front door glass with
-; UMTS module attached.
-G0 X128 Y200 F18000       ; park rear-center, accessible through door
+;===== install pause: load module with pen now =================
+; Park at bed center — easier reach through front door than rear Y=200.
+G0 X{PARK_X} Y{PARK_Y} F{TRAVEL_FEED}
 M400                      ; flush motion buffer
 M400 U1                   ; PAUSE: install UMTS module + pen, then press Resume on LCD
                           ; (M0 is ignored on Bambu P1S firmware — must use M400 U1)

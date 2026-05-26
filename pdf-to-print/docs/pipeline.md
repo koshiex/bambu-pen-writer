@@ -149,6 +149,24 @@ gcode_y =  87.9  + x_svg   (лево-право → возрастающий gco
 
 При запуске скрипт **перезаписывает `~/.vpype.toml`** с подставленными значениями `Z_PEN_DOWN` и `Z_HOP`. Не редактировать `~/.vpype.toml` вручную — будет затёрт при следующем запуске.
 
+### Экспериментальные фичи пера (post-process, default off)
+
+После vpype `gwrite` [`scripts/gcode_experimental.py`](scripts/gcode_experimental.py) может изменить page G-code. Включение — отдельные флаги (по умолчанию **выкл.**):
+
+| Фича | Env | CLI |
+|------|-----|-----|
+| Переменное давление (Z вдоль штриха) | `PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_PRESSURE=1` | `svg_to_gcode.py --experimental-variable-pressure` |
+| Переменный F (синтетический «тайминг») | `PDF_TO_PRINT_EXPERIMENTAL_VARIABLE_FEEDRATE=1` | `--experimental-variable-feedrate` |
+| Jitter «слова» + зачёркивание (~5% кластеров) | `PDF_TO_PRINT_EXPERIMENTAL_STRIKETHROUGH=1` | `--experimental-strikethrough` |
+
+Параметры: `PDF_TO_PRINT_EXPERIMENTAL_PRESSURE_Z_RANGE_MM` (default `0.25`), `PDF_TO_PRINT_EXPERIMENTAL_FEEDRATE_JITTER` (`0.2`), `PDF_TO_PRINT_EXPERIMENTAL_STRIKE_PROBABILITY` (`5`), `PDF_TO_PRINT_EXPERIMENTAL_WORD_GAP_MM` (`1.2`), `PDF_TO_PRINT_EXPERIMENTAL_RNG_SEED` (опционально).
+
+⚠️ Сначала калибруйте `PRESSURE_Z_RANGE_MM` на **жертвенном листе** — слишком большой диапазон рвёт бумагу. При любом experimental-флаге `./scripts/build.sh` **пропускает Phase 2b strict** (доп. штрихи зачёркивания после маркера `; === pdf-to-print experimental strokes ===`); reading-order основного контента проверяется в `convert_one` **до** post-process.
+
+Дымовой тест: `python3 scripts/test_gcode_experimental.py`.
+
+Полная сборка с experimental + spread: [`scripts/build_experimental.sh`](scripts/build_experimental.sh) (обёртка над `build.sh`, default `output/notebook_experimental.gcode`).
+
 Чтобы изменить Z-калибровку:
 1. Поправить `Z_PEN_DOWN` в `scripts/svg_to_gcode.py`
 2. Запустить `./scripts/build.sh` — пере-сгенерируется gcode со скорректированным Z
@@ -161,13 +179,39 @@ gcode_y =  87.9  + x_svg   (лево-право → возрастающий gco
 
 Bounds итогового G-code (pen-frame): X≈28.6..221, Y≈57..211 — внутри paper и UMTS safe zone.
 
+### `scripts/page_order.py`
+
+Порядок склейки per-page G-code в финальный `notebook.gcode`:
+
+- **`sequential`** (по умолчанию): `page_01` … `page_NN` как в PDF — тетрадь сложена, листаем по порядку.
+- **`spread`**: порядок обхода **распоротой** 24-страничной тетради (12 листов, сшивка в корешок) — 6 разворотов × 4 страницы. Меняется только merge; extract и `svg_to_gcode` без изменений.
+
+Таблица разворотов (слева направо: лево наружа → лево внутри → право внутри → право снаружи):
+
+| Разворот | Страницы |
+|----------|----------|
+| 1 (обложка) | 1, 2, 23, 24 |
+| 2 | 3, 4, 21, 22 |
+| 3 | 5, 6, 19, 20 |
+| 4 | 7, 8, 17, 18 |
+| 5 | 9, 10, 15, 16 |
+| 6 (середина) | 11, 12, 13, 14 |
+
+Формула для разворота `s` (1..6): `[2s−1, 2s, 25−2s, 26−2s]`. Сейчас поддерживается только **N=24**; для другого PDF — `sequential`.
+
+Самотест: `python3 scripts/page_order.py`.
+
 ### `scripts/merge_pages.py`
 
-Конкатенирует start + (page + pause) × N + end в один G-code. `{NEXT_PAGE}` placeholder в `page_pause.gcode` заменяется на двузначный номер.
+Конкатенирует start + (page + pause) × N + end в один G-code. Порядок страниц — `--page-order sequential|spread` (см. [`page_order.py`](scripts/page_order.py)). Метки `;===== PAGE NN =====` и `{NEXT_PAGE}` в паузе — **номер PDF-страницы** из имени файла (`page_23.gcode` → `23`), не порядковый номер шага.
 
 ### `scripts/build.sh`
 
-Orchestrator. Активирует .venv: Phase 0 — `e2e_reading_order_pipeline.py`; Phase 1 по умолчанию — `extract_pages_raster.sh`; Phase 2 — `svg_to_gcode.py`; Phase 2b — валидация порядка штрихов для всех страниц; Phase 3 — merge. Для прямого SVG из Inkscape — третий аргумент `vector`, либо `EXTRACT_MODE=vector` / `USE_VECTOR_EXTRACT=1` (см. комментарии в [`scripts/build.sh`](scripts/build.sh)).
+Orchestrator. Активирует .venv: Phase 0 — `e2e_reading_order_pipeline.py`; Phase 1 по умолчанию — `extract_pages_raster.sh`; Phase 2 — `svg_to_gcode.py`; Phase 2b — валидация порядка штрихов для всех страниц; Phase 3 — merge. Третий аргумент: `vector` / `raster`. Четвёртый (или `PDF_TO_PRINT_PAGE_ORDER=spread`): порядок merge — `spread` для распоротой тетради. Пример:
+
+```bash
+./scripts/build.sh pdfs/2.pdf output/notebook.gcode raster spread
+```
 
 ---
 

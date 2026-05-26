@@ -20,7 +20,7 @@ line_start = ""
 #   pen down = Z_PEN_DOWN          (e.g. 18.0 mm)
 #   pen up   = Z_PEN_DOWN + Z_HOP  (e.g. 18 + 15 = 33 mm с Z_HOP=15)
 # F on segment = DRAW_SPEED_MM_S × 60 (mm/min).
-segment_first = "G0 X{x:.3f} Y{y:.3f} F18000\nG1 Z<Z_PEN_DOWN> F1200\n"
+segment_first = "G0 X{x:.3f} Y{y:.3f} F30000\nG1 Z<Z_PEN_DOWN> F1800\n"
 segment       = "G1 X{x:.3f} Y{y:.3f} F3000\n"
-line_end      = "G1 Z<Z_PEN_DOWN+Z_HOP> F1200\n"
-info = "Bambu Lab P1S + UMTS pen plotter. See DRAW_SPEED_MM_S in svg_to_gcode.py; F18000 travel."
+line_end      = "G1 Z<Z_PEN_DOWN+Z_HOP> F1800\n"
+info = "Bambu Lab P1S pen plotter. Speeds: holder_config TRAVEL/Z + svg_to_gcode DRAW_SPEED_MM_S."

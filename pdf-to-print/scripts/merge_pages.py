@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -45,13 +46,44 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from page_order import page_num_from_path, page_paths  # noqa: E402
+from holder_config import (  # noqa: E402
+    PARK_NOZZLE_X_MM,
+    PARK_NOZZLE_Y_MM,
+    select_profile,
+    travel_feed_mm_min,
+    z_travel_feed_mm_min,
+    z_travel_clearance_for_profile,
+)
+from page_order import (  # noqa: E402
+    SPREAD_BOUNDARIES,
+    is_spread_boundary,
+    page_num_from_path,
+    page_paths,
+)
 
 
 def read(path: Path) -> str:
     if not path.is_file():
         sys.exit(f"ERROR: missing {path}")
     return path.read_text()
+
+
+def patch_holder_templates(
+    text: str,
+    z_travel_clearance: float,
+    park_x: float,
+    park_y: float,
+    travel_f: int,
+    z_travel_f: int,
+) -> str:
+    """Substitute holder placeholders in start/pause/end templates."""
+    return (
+        text.replace("{Z_TRAVEL_CLEARANCE}", f"{z_travel_clearance:.1f}")
+        .replace("{PARK_X}", f"{park_x:.0f}")
+        .replace("{PARK_Y}", f"{park_y:.0f}")
+        .replace("{TRAVEL_FEED}", str(travel_f))
+        .replace("{Z_TRAVEL_FEED}", str(z_travel_f))
+    )
 
 
 def patch_header(template: str, n_pages: int, total_min: int) -> str:
@@ -113,14 +145,43 @@ def main() -> None:
         default="sequential",
         help="merge order: sequential (PDF 1..N) or spread (unfolded 24-page signature)",
     )
+    parser.add_argument(
+        "--soft-holder",
+        action="store_true",
+        help="use soft-holder Z travel clearance in templates (env PDF_TO_PRINT_SOFT_HOLDER)",
+    )
+    parser.add_argument(
+        "--start-page",
+        type=int,
+        default=1,
+        metavar="N",
+        help="resume from page N (1-based); output contains pages >= N only",
+    )
     args = parser.parse_args()
+
+    if args.start_page < 1:
+        sys.exit(f"ERROR: --start-page must be >= 1, got {args.start_page}")
+
+    soft_holder = args.soft_holder or os.environ.get(
+        "PDF_TO_PRINT_SOFT_HOLDER", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    profile = select_profile(soft_holder=soft_holder)
+    z_clear = z_travel_clearance_for_profile(profile)
 
     gcode_dir = Path(args.gcode_dir)
     tpl_dir = Path(args.templates_dir)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pages = page_paths(gcode_dir, args.page_order)
+    if args.page_order == "spread" and args.start_page > 1 and not is_spread_boundary(args.start_page):
+        print(
+            f"WARN: --start-page {args.start_page} is not at a spread boundary "
+            f"{sorted(SPREAD_BOUNDARIES)}. Operator must mount the correct loose sheet "
+            f"at the correct orientation manually.",
+            file=sys.stderr,
+        )
+
+    pages = page_paths(gcode_dir, args.page_order, start_page=args.start_page)
     n = len(pages)
     mpp = args.minutes_per_page
     total_min = n * mpp
@@ -130,15 +191,24 @@ def main() -> None:
     header = patch_header(header, n, total_min)
     config = read(tpl_dir / "bambu_config_block.gcode")
 
-    # Our content
-    start = read(tpl_dir / "bambu_start.gcode")
-    end = read(tpl_dir / "bambu_end.gcode")
-    pause_tpl = read(tpl_dir / "page_pause.gcode")
+    # Our content (Z lift scales with holder — soft-holder needs ~83 mm vs UMTS 50 mm)
+    park_kw = dict(
+        park_x=PARK_NOZZLE_X_MM,
+        park_y=PARK_NOZZLE_Y_MM,
+        travel_f=travel_feed_mm_min(),
+        z_travel_f=z_travel_feed_mm_min(),
+    )
+    start = patch_holder_templates(read(tpl_dir / "bambu_start.gcode"), z_clear, **park_kw)
+    end = patch_holder_templates(read(tpl_dir / "bambu_end.gcode"), z_clear, **park_kw)
+    pause_tpl = patch_holder_templates(read(tpl_dir / "page_pause.gcode"), z_clear, **park_kw)
 
     order_label = "spread (unfolded signature)" if args.page_order == "spread" else "sequential"
+    start_label = f" from page {args.start_page}" if args.start_page > 1 else ""
     print(
-        f"Merging {n} pages -> {out_path} "
-        f"(order={order_label}, ~{mpp} min/page, est {total_min} min total)"
+        f"Merging {n} pages{start_label} -> {out_path} "
+        f"(order={order_label}, holder={profile.name}, park=({PARK_NOZZLE_X_MM:.0f},"
+        f"{PARK_NOZZLE_Y_MM:.0f}) Z={z_clear:.1f}, "
+        f"~{mpp} min/page, est {total_min} min total)"
     )
 
     with out_path.open("w") as out:

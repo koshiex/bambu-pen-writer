@@ -1,7 +1,7 @@
 ;===== PAGE FLIP PAUSE =====
 ; Operator action: open door, flip notebook page, verify alignment, close door, resume on LCD.
-G1 Z50 F1200            ; high Z lift — clearance over notebook + UMTS module
-G0 X128 Y200 F18000     ; park head rear-center, away from front door glass
+G1 Z{Z_TRAVEL_CLEARANCE} F{Z_TRAVEL_FEED}            ; high Z lift — clearance over notebook + pen module
+G0 X{PARK_X} Y{PARK_Y} F{TRAVEL_FEED}     ; park at bed center for page flip
 M400                    ; wait for moves to finish
 M106 S0                 ; fans off (belt-and-suspenders)
 M106 P2 S0

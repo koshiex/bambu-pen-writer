@@ -146,8 +146,8 @@ def make_stroke_block_from_polyline(
     *,
     z_pen: float,
     z_up: float,
-    travel_f: int = 18000,
-    z_feed: int = 1200,
+    travel_f: int = 30000,
+    z_feed: int = 1800,
 ) -> StrokeBlock:
     """Build vpype-style stroke from (x, y, optional z, optional f) vertices."""
     if len(points) < 1:

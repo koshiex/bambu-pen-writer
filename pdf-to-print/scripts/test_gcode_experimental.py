@@ -99,28 +99,17 @@ def main() -> None:
 
         assert EXPERIMENTAL_STROKES_MARKER not in text
 
-        # Strikethrough: 4 strokes, one text row (axis=x: shared gcode X, nearby gcode Y)
-        strike_gcode = "\n".join(
-            [
+        # Strikethrough: 3 tall strokes, one word cluster (inline span along Y ≥ 8mm)
+        strike_lines: list[str] = []
+        for x_pen in (104.0, 105.0, 106.0):
+            strike_lines += [
                 "G0 X200.000 Y100.000 F18000",
                 "G1 Z40.700 F1200",
-                "G1 X104.000 Y100.000 F24000",
+                f"G1 X{x_pen:.3f} Y100.000 F24000",
+                f"G1 X{x_pen:.3f} Y108.000 F24000",
                 "G1 Z52.700 F1200",
-                "G0 X200.000 Y100.150 F18000",
-                "G1 Z40.700 F1200",
-                "G1 X108.000 Y100.150 F24000",
-                "G1 Z52.700 F1200",
-                "G0 X200.000 Y100.080 F18000",
-                "G1 Z40.700 F1200",
-                "G1 X112.000 Y100.080 F24000",
-                "G1 Z52.700 F1200",
-                "G0 X200.000 Y100.220 F18000",
-                "G1 Z40.700 F1200",
-                "G1 X116.000 Y100.220 F24000",
-                "G1 Z52.700 F1200",
-                "",
             ]
-        )
+        strike_gcode = "\n".join(strike_lines + [""])
         path.write_text(strike_gcode, encoding="utf-8")
         strike_params = resolve_experimental_params()
         strike_params.rng_seed = 0
@@ -139,7 +128,11 @@ def main() -> None:
         )
         assert EXPERIMENTAL_STROKES_MARKER in path.read_text(encoding="utf-8")
         blocks2, _ = parse_stroke_blocks(path, Z_PEN, Z_UP)
-        assert len(blocks2) >= 5, "expected base strokes + strikethrough"
+        assert len(blocks2) >= 4, "expected base strokes + strikethrough"
+        strike_poly = blocks2[-1].polyline_xy()
+        dy = abs(float(strike_poly[-1].imag - strike_poly[0].imag))
+        dx = abs(float(strike_poly[-1].real - strike_poly[0].real))
+        assert dy > dx, f"strikethrough should run along Y (word axis), got dx={dx} dy={dy}"
 
     print("test_gcode_experimental: OK")
 

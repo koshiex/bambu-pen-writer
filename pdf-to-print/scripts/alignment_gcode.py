@@ -13,7 +13,7 @@ Pattern:
     corner — marks orientation so you know which way notebook goes
 
 Usage:
-  python3 scripts/alignment_gcode.py
+  python3 scripts/alignment_gcode.py [--soft-holder]
 """
 
 from __future__ import annotations
@@ -23,12 +23,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from svg_to_gcode import (  # noqa: E402
-    Z_PEN_DOWN as DEFAULT_Z_DOWN,
-    Z_HOP as DEFAULT_Z_HOP,
-    PEN_OFFSET_X,
-    PEN_OFFSET_Y,
+import svg_to_gcode as plotter  # noqa: E402
+from holder_config import (  # noqa: E402
+    PARK_NOZZLE_X_MM,
+    PARK_NOZZLE_Y_MM,
+    travel_feed_mm_min,
+    z_travel_clearance,
+    z_travel_feed_mm_min,
 )
+from svg_to_gcode import apply_holder_profile  # noqa: E402
 
 # Paper bounds in PEN frame (where ink lands), bed-relative.
 # Pipeline applies offset compensation at gcode emission (gcode = nozzle frame).
@@ -40,7 +43,7 @@ Y_MAX = 215.0   # 50 + 165
 
 def pen_to_nozzle(x: float, y: float) -> tuple[float, float]:
     """Convert pen-frame (X, Y) to nozzle-frame for gcode emission."""
-    return x - PEN_OFFSET_X, y - PEN_OFFSET_Y
+    return x - plotter.PEN_OFFSET_X, y - plotter.PEN_OFFSET_Y
 
 # Stroke thickness — multiple passes with small offset = thicker line
 STROKE_PASSES = 3
@@ -72,8 +75,8 @@ def thick_line(x1: float, y1: float, x2: float, y2: float) -> list[str]:
         ax_n, ay_n = pen_to_nozzle(ax, ay)
         bx_n, by_n = pen_to_nozzle(bx, by)
         if i == 0:
-            out.append(f"G0 X{ax_n:.3f} Y{ay_n:.3f} F18000")
-            out.append(f"G1 Z{DEFAULT_Z_DOWN:.3f} F1200")
+            out.append(f"G0 X{ax_n:.3f} Y{ay_n:.3f} F{travel_feed_mm_min()}")
+            out.append(f"G1 Z{plotter.Z_PEN_DOWN:.3f} F{z_travel_feed_mm_min()}")
         else:
             out.append(f"G1 X{ax_n:.3f} Y{ay_n:.3f} F12000")
         out.append(f"G1 X{bx_n:.3f} Y{by_n:.3f} F12000")
@@ -81,7 +84,7 @@ def thick_line(x1: float, y1: float, x2: float, y2: float) -> list[str]:
 
 
 def stroke_lift() -> list[str]:
-    return [f"G1 Z{DEFAULT_Z_DOWN + DEFAULT_Z_HOP:.3f} F1200"]
+    return [f"G1 Z{plotter.Z_PEN_DOWN + plotter.Z_HOP:.3f} F{z_travel_feed_mm_min()}"]
 
 
 def build_drawing() -> list[str]:
@@ -124,7 +127,13 @@ def build_drawing() -> list[str]:
     return body
 
 
-def build_gcode() -> str:
+def build_gcode(
+    z_clear: float,
+    park_x: float,
+    park_y: float,
+    travel_f: int,
+    z_travel_f: int,
+) -> str:
     drawing = "\n".join(build_drawing()) + "\n"
 
     return f"""; HEADER_BLOCK_START
@@ -157,7 +166,7 @@ M106 P3 S0
 ; Sheet becomes permanent positioning template.
 ; Frame: paper bounds X∈[{X_MIN}, {X_MAX}], Y∈[{Y_MIN}, {Y_MAX}]
 ; Stroke: {STROKE_PASSES} passes × {STROKE_OFFSET}mm offset = thick visible line
-; Z_PEN_DOWN={DEFAULT_Z_DOWN}, Z_HOP={DEFAULT_Z_HOP}
+; Z_PEN_DOWN={plotter.Z_PEN_DOWN}, Z_HOP={plotter.Z_HOP}
 
 M17
 G90
@@ -169,23 +178,23 @@ M106 P2 S0
 M106 P3 S0
 M221 X0 Y0 Z0
 G28
-G1 Z25 F600
+G1 Z{z_clear:.1f} F600
 M104 S180
 M109 S180
 
 ;===== install pause =====
-G0 X128 Y200 F18000
+G0 X{park_x:.0f} Y{park_y:.0f} F{travel_f}
 M400
 M400 U1                    ; install UMTS + pen, then Resume
 
 ; CHANGE_LAYER
-; Z_HEIGHT: {DEFAULT_Z_DOWN:.2f}
+; Z_HEIGHT: {plotter.Z_PEN_DOWN:.2f}
 ; LAYER_HEIGHT: 0.10
 M73 L1
 {drawing}
 ;===== final pause =====
-G1 Z50 F1200
-G0 X128 Y200 F18000
+G1 Z{z_clear:.1f} F{z_travel_f}
+G0 X{park_x:.0f} Y{park_y:.0f} F{travel_f}
 M400
 M73 P100 R0
 M400 U1                    ; remove UMTS, then Stop on LCD
@@ -199,16 +208,32 @@ M84
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--soft-holder",
+        action="store_true",
+        help="KEV spring holder profile (same as svg_to_gcode --soft-holder)",
+    )
     parser.add_argument("--out", default="output/alignment.gcode")
     args = parser.parse_args()
 
+    apply_holder_profile(soft_holder=args.soft_holder)
+    z_clear = z_travel_clearance(plotter.Z_PEN_DOWN)
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build_gcode())
+    out.write_text(
+        build_gcode(
+            z_clear,
+            PARK_NOZZLE_X_MM,
+            PARK_NOZZLE_Y_MM,
+            travel_feed_mm_min(),
+            z_travel_feed_mm_min(),
+        )
+    )
     print(f"✅ {out}")
     print(f"   Frame: paper bounds 205×165 (landscape), {STROKE_PASSES}-pass thick stroke")
     print(f"   Center crosshair + rear-right corner arrow (orientation key)")
-    print(f"   Z_PEN_DOWN={DEFAULT_Z_DOWN}, Z_HOP={DEFAULT_Z_HOP}")
+    print(f"   Z_PEN_DOWN={plotter.Z_PEN_DOWN}, Z_HOP={plotter.Z_HOP}, Z_travel={z_clear}")
     print(f"")
     print(f"   Workflow:")
     print(f"   1. Place big sacrificial sheet on bed (covering at least X=24..229, Y=52..217)")

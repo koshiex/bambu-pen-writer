@@ -13,7 +13,7 @@ Pipeline per SVG:
 Output: build/gcode/page_NN.gcode
 
 Usage:
-  python3 scripts/svg_to_gcode.py [--svg-dir DIR] [--out-dir DIR]
+  python3 scripts/svg_to_gcode.py [--svg-dir DIR] [--out-dir DIR] [--soft-holder]
 
 Requires:
   - Inkscape and vpype installed
@@ -43,14 +43,28 @@ from gcode_experimental import (  # noqa: E402
     resolve_experimental_flags,
     resolve_experimental_params,
 )
+from holder_config import (  # noqa: E402
+    UMTS,
+    TRAVEL_SPEED_MM_S,
+    Z_TRAVEL_SPEED_MM_S,
+    nozzle_x_max_pen,
+    paper_origin_x,
+    paper_origin_y,
+    select_profile,
+    travel_feed_mm_min,
+    z_travel_feed_mm_min,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_VPYPE_GENERATED_TOML = _REPO_ROOT / ".vpype.generated.toml"
+
+# Active holder profile (default UMTS). Override via --soft-holder or apply_holder_profile().
+_ACTIVE_HOLDER = UMTS
 
 # Pen offset relative to nozzle (firmware coords). Pen is shifted toward bed
-# origin (0, 0) from nozzle position. Measured with caliper:
-#   delta_X = 26.46 mm  (pen 26.46 mm toward bed-left from nozzle)
-#   delta_Y = 37.9  mm  (pen 37.9 mm toward bed-front from nozzle)
-# Diagonal sanity: √(26.46² + 37.9²) = 46.2 mm ≈ measured 46.5 ✓
-PEN_OFFSET_X = -26.46
-PEN_OFFSET_Y = -37.9
+# origin (0, 0) from nozzle position.
+PEN_OFFSET_X = _ACTIVE_HOLDER.pen_offset_x
+PEN_OFFSET_Y = _ACTIVE_HOLDER.pen_offset_y
 
 # Paper position in PEN frame (where ink lands on bed). User-friendly:
 # bed-relative — measure with ruler from bed origin (front-left corner of plate).
@@ -66,19 +80,42 @@ PAPER_H     = 165.0    # tetradka landscape height (along Y)
 #
 # vpype `translate` target = NOZZLE frame (firmware coords). After scale 1 -1,
 # content Y becomes negative; translate by paper rear edge in nozzle frame
-# (paper_rear_pen + |PEN_OFFSET_Y| = 215 + 37.9 = 252.9).
-PAPER_ORIGIN_X = f"{PAPER_LEFT - PEN_OFFSET_X}mm"            # 50.46
-PAPER_ORIGIN_Y = f"{PAPER_FRONT + PAPER_H - PEN_OFFSET_Y}mm"  # 252.9
+# (paper_rear_pen + |PEN_OFFSET_Y| = 215 + 37.9 = 252.9 for UMTS).
+PAPER_ORIGIN_X = paper_origin_x(PAPER_LEFT, PEN_OFFSET_X)
+PAPER_ORIGIN_Y = paper_origin_y(PAPER_FRONT, PAPER_H, PEN_OFFSET_Y)
 
-# Z-offset (mm) — distance pen tip extends BELOW nozzle when UMTS module loaded.
-# Critical: raw G-code we generate uses absolute Z values in NOZZLE frame.
-# When pen touches paper, nozzle is at Z = Z_PEN_DOWN above bed.
-# When pen lifts (Z-hop), nozzle is at Z = Z_PEN_DOWN + Z_HOP.
-# Source: UMTS docs (docs/umts-p1s-pen.md): Orca Z-offset +17 mm Stabilo, +20 mm POSCA — baked here as absolute nozzle Z.
-# Thin school notebook (~7 mm spine vs thicker pads): top sheet sits lower → slightly raise nozzle vs old 18 mm default.
+# Z-offset (mm) — nozzle Z above bed when pen touches paper; Z-hop = lift between strokes.
 # Calibrate live (Test 3 in docs/operator-manual.md): too faint → lower Z_PEN_DOWN; too much drag → raise it.
-Z_PEN_DOWN = 40.7
-Z_HOP = 12.0
+# --soft-holder: +33.5 mm Z vs UMTS default, Z-hop halved (see holder_config.SOFT_HOLDER).
+Z_PEN_DOWN = _ACTIVE_HOLDER.z_pen_down
+Z_HOP = _ACTIVE_HOLDER.z_hop
+
+
+def apply_holder_profile(*, soft_holder: bool = False) -> None:
+    """Switch active pen offset / Z / paper origin (module-level globals).
+
+    PAPER_LEFT / PAPER_FRONT stay fixed (alignment template coordinates); only
+    pen-nozzle offset and Z change per holder.
+    """
+    global _ACTIVE_HOLDER, PEN_OFFSET_X, PEN_OFFSET_Y, PAPER_ORIGIN_X, PAPER_ORIGIN_Y
+    global Z_PEN_DOWN, Z_HOP
+
+    profile = select_profile(soft_holder=soft_holder)
+    _ACTIVE_HOLDER = profile
+    PEN_OFFSET_X = profile.pen_offset_x
+    PEN_OFFSET_Y = profile.pen_offset_y
+    Z_PEN_DOWN = profile.z_pen_down
+    Z_HOP = profile.z_hop
+    PAPER_ORIGIN_X = paper_origin_x(PAPER_LEFT, PEN_OFFSET_X)
+    PAPER_ORIGIN_Y = paper_origin_y(PAPER_FRONT, PAPER_H, PEN_OFFSET_Y)
+
+    nx_max = nozzle_x_max_pen(PAPER_LEFT, PAPER_W, PEN_OFFSET_X)
+    if nx_max > 256.0:
+        print(
+            f"  WARNING: holder {profile.name!r}: nozzle X max {nx_max:.1f} mm > bed 256 "
+            f"(shift paper left or reduce PAPER_W)",
+            file=sys.stderr,
+        )
 
 VPYPE_PROFILE = "bambu_p1s_umts"
 # Curve linearization on SVG import (vpype read --quantization). Finer = more vertices / larger G-code.
@@ -108,6 +145,10 @@ READING_ROW_AXIS_AUTO = False
 # XY feed for pen-down moves (G1 … X Y F…). Marlin/Bambu use mm/min → mm/s × 60.
 DRAW_SPEED_MM_S = 400.0
 DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
+
+# Pen-up: G0 XY and G1 Z (see holder_config TRAVEL_SPEED_MM_S / Z_TRAVEL_SPEED_MM_S).
+TRAVEL_FEED_MM_MIN = travel_feed_mm_min()
+Z_TRAVEL_FEED_MM_MIN = z_travel_feed_mm_min()
 
 # Must match gwrite `{{x:.3f}}` / `{{y:.3f}}` in write_vpype_profile() so sort keys match
 # `validate_reading_order_gcode` (parsed G-code uses the same precision).
@@ -175,13 +216,25 @@ def reading_stroke_metrics(
 
 
 def write_vpype_profile() -> None:
-    """Write ~/.vpype.toml with Z constants substituted. Required because vpype
-    gwrite reads profiles from ~/.vpype.toml — we cannot pass Z inline."""
+    """Write vpype gwrite profile and reload into vp.config_manager.
+
+    vpype loads ~/.vpype.toml once at import time; we must reload after writing so
+    Z_PEN_DOWN / Z_HOP match the active holder (UMTS vs --soft-holder).
+    """
     z_down = Z_PEN_DOWN
     z_up = Z_PEN_DOWN + Z_HOP
-    content = f"""# Auto-generated by scripts/svg_to_gcode.py.
-# Source of truth: Z_PEN_DOWN={Z_PEN_DOWN}, Z_HOP={Z_HOP} in svg_to_gcode.py.
-# To change pen Z calibration: edit svg_to_gcode.py and re-run.
+    holder = _ACTIVE_HOLDER.name
+    xy_f = TRAVEL_FEED_MM_MIN
+    z_f = Z_TRAVEL_FEED_MM_MIN
+    segment_first = f"G0 X{{x:.3f}} Y{{y:.3f}} F{xy_f}\\nG1 Z{z_down:.3f} F{z_f}\\n"
+    segment = f"G1 X{{x:.3f}} Y{{y:.3f}} F{DRAW_FEED_MM_MIN}\\n"
+    line_end = f"G1 Z{z_up:.3f} F{z_f}\\n"
+    info = (
+        f"Bambu Lab P1S pen plotter ({holder}). Z_PEN_DOWN={Z_PEN_DOWN} Z_HOP={Z_HOP} "
+        f"draw={DRAW_SPEED_MM_S}mm/s travel={TRAVEL_SPEED_MM_S} Z_travel={Z_TRAVEL_SPEED_MM_S}"
+    )
+    content = f"""# Auto-generated by scripts/svg_to_gcode.py — do not edit.
+# holder={holder}  Z_PEN_DOWN={Z_PEN_DOWN}  Z_HOP={Z_HOP}
 
 [gwrite.bambu_p1s_umts]
 unit = "mm"
@@ -191,14 +244,23 @@ document_end = ""
 layer_start = ""
 layer_end = ""
 line_start = ""
-segment_first = "G0 X{{x:.3f}} Y{{y:.3f}} F18000\\nG1 Z{z_down:.3f} F1200\\n"
-segment = "G1 X{{x:.3f}} Y{{y:.3f}} F{DRAW_FEED_MM_MIN}\\n"
-line_end = "G1 Z{z_up:.3f} F1200\\n"
-info = "Bambu Lab P1S + UMTS pen plotter. Z_PEN_DOWN={Z_PEN_DOWN} Z_HOP={Z_HOP} draw={DRAW_SPEED_MM_S}mm/s"
+segment_first = "{segment_first}"
+segment = "{segment}"
+line_end = "{line_end}"
+info = "{info}"
 """
-    target = Path.home() / ".vpype.toml"
-    target.write_text(content)
-    print(f"  wrote {target} (Z down={z_down}, Z up={z_up})")
+    _VPYPE_GENERATED_TOML.write_text(content)
+    print(f"  wrote {_VPYPE_GENERATED_TOML} (Z down={z_down}, Z up={z_up})")
+
+    home_toml = Path.home() / ".vpype.toml"
+    try:
+        home_toml.write_text(content)
+        print(f"  wrote {home_toml}")
+    except OSError as exc:
+        print(f"  WARNING: could not write {home_toml}: {exc}", file=sys.stderr)
+
+    # Reload so gwrite uses fresh Z (import-time ~/.vpype.toml may be stale).
+    vp.config_manager.load_config_file(str(_VPYPE_GENERATED_TOML))
 
 
 def _effective_reading_sort_invert_y(cli_invert: bool) -> bool:
@@ -637,7 +699,25 @@ def main() -> None:
         action="store_true",
         help="post-process: jitter word clusters + strikethrough (env PDF_TO_PRINT_EXPERIMENTAL_STRIKETHROUGH)",
     )
+    parser.add_argument(
+        "--soft-holder",
+        action="store_true",
+        help=(
+            "KEV/MakerWorld spring pen holder: XY (-38.34, -21.13) mm, "
+            "Z_PEN_DOWN +33.5 mm vs UMTS, Z-hop halved (env PDF_TO_PRINT_SOFT_HOLDER=1)"
+        ),
+    )
     args = parser.parse_args()
+
+    soft_holder = args.soft_holder or os.environ.get(
+        "PDF_TO_PRINT_SOFT_HOLDER", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    apply_holder_profile(soft_holder=soft_holder)
+    if soft_holder:
+        print(
+            f"  holder: soft-holder  pen_offset=({PEN_OFFSET_X}, {PEN_OFFSET_Y}) mm  "
+            f"Z_PEN_DOWN={Z_PEN_DOWN} Z_HOP={Z_HOP}"
+        )
 
     svg_dir = Path(args.svg_dir)
     out_dir = Path(args.out_dir)

@@ -25,13 +25,31 @@
 # Linemerge: enabled by default (merges adjacent segments → fewer pen-ups, absorbs junction noise).
 # Disable: PDF_TO_PRINT_SKIP_LINEMERGE=1 ./build.sh
 #
+# Soft spring pen holder (KEV/MakerWorld): PDF_TO_PRINT_SOFT_HOLDER=1 ./build.sh
+# or pass --soft-holder to svg_to_gcode (wired below).
+#
 # Noise filter: strokes shorter than STROKE_MIN_LENGTH_MM (default 0.3mm) removed after tracing.
 # Override: PDF_TO_PRINT_STROKE_MIN_LENGTH_MM=0.5 (raise) or =0 (disable).
 
 set -euo pipefail
 
 PDF="${1:-pdfs/2.pdf}"
-OUT="${2:-output/notebook.gcode}"
+PDF_STEM="$(basename "$PDF" .pdf)"
+
+START_PAGE="${START_PAGE:-1}"
+if ! [[ "$START_PAGE" =~ ^[0-9]+$ ]] || (( START_PAGE < 1 )); then
+  echo "ERROR: START_PAGE must be a positive integer, got: $START_PAGE" >&2
+  exit 1
+fi
+
+OUT_SUFFIX="${OUT_SUFFIX:-}"
+START_SUFFIX=""
+if (( START_PAGE > 1 )); then START_SUFFIX="_from${START_PAGE}"; fi
+OUT="${2:-output/${PDF_STEM}${OUT_SUFFIX}${START_SUFFIX}.gcode}"
+
+SVG_DIR="build/${PDF_STEM}/svg"
+GCODE_DIR="build/${PDF_STEM}/gcode"
+
 EXTRACT="${EXTRACT_MODE:-raster}"
 if [[ "${USE_RASTER_EXTRACT:-0}" == "1" ]]; then
   EXTRACT=raster
@@ -74,6 +92,11 @@ if [[ "${PDF_TO_PRINT_SKIP_LINEMERGE:-0}" == "1" ]]; then
   READING_OPTS+=(--skip-linemerge)
 fi
 
+HOLDER_OPTS=()
+if [[ "${PDF_TO_PRINT_SOFT_HOLDER:-0}" == "1" ]]; then
+  HOLDER_OPTS+=(--soft-holder)
+fi
+
 # Activate venv if present
 if [[ -f .venv/bin/activate ]]; then
   # shellcheck disable=SC1091
@@ -88,14 +111,15 @@ python3 scripts/e2e_reading_order_pipeline.py
 
 echo ">>> Phase 1: extracting PDF pages to SVG (mode=$EXTRACT)"
 if [[ "$EXTRACT" == "raster" ]]; then
-  ./scripts/extract_pages_raster.sh "$PDF" build/svg
+  ./scripts/extract_pages_raster.sh "$PDF" "$SVG_DIR"
 else
-  ./scripts/extract_pages.sh "$PDF" build/svg
+  ./scripts/extract_pages.sh "$PDF" "$SVG_DIR"
 fi
 
 echo ""
 echo ">>> Phase 2: SVG -> per-page G-code (reading-order: axis=${READING_FORCE_AXIS}, invert_y=${PDF_TO_PRINT_READING_INVERT_Y:-1})"
-python3 scripts/svg_to_gcode.py --svg-dir build/svg --out-dir build/gcode "${READING_OPTS[@]}"
+python3 scripts/svg_to_gcode.py --svg-dir "$SVG_DIR" --out-dir "$GCODE_DIR" \
+  "${READING_OPTS[@]}" "${HOLDER_OPTS[@]}"
 
 echo ""
 EXPERIMENTAL_OFF=1
@@ -112,13 +136,14 @@ if [[ "${EXPERIMENTAL_OFF}" == "0" ]]; then
 else
   echo ">>> Phase 2b: validate reading order (all pages, strict)"
   shopt -s nullglob
-  GCODE_PAGES=(build/gcode/page_*.gcode)
+  GCODE_PAGES=("$GCODE_DIR"/page_*.gcode)
   if [[ ${#GCODE_PAGES[@]} -eq 0 ]]; then
     echo "ERROR: no build/gcode/page_*.gcode after Phase 2" >&2
     exit 1
   fi
   for g in "${GCODE_PAGES[@]}"; do
-    python3 scripts/validate_reading_order_gcode.py --strict --quiet "${READING_OPTS[@]}" "$g" || {
+    python3 scripts/validate_reading_order_gcode.py --strict --quiet \
+      "${READING_OPTS[@]}" "${HOLDER_OPTS[@]}" "$g" || {
       echo "ERROR: reading-order validation failed: $g (re-run without --quiet for details)" >&2
       exit 1
     }
@@ -132,8 +157,8 @@ if [[ "$PAGE_ORDER" == "spread" ]]; then
 else
   echo ">>> Phase 3: merging pages (page order: sequential)"
 fi
-python3 scripts/merge_pages.py --gcode-dir build/gcode --templates-dir templates --out "$OUT" \
-  --page-order "$PAGE_ORDER"
+python3 scripts/merge_pages.py --gcode-dir "$GCODE_DIR" --templates-dir templates --out "$OUT" \
+  --page-order "$PAGE_ORDER" --start-page "$START_PAGE" "${HOLDER_OPTS[@]}"
 
 echo ""
 echo "✅ DONE: $OUT"
@@ -141,5 +166,5 @@ echo ""
 echo "Next steps:"
 echo "  1. Open Orca Slicer in LAN ONLY mode"
 echo "  2. Device -> Open G-code File -> select $OUT"
-echo "  3. Verify in G-code preview that all 23 pause points are present"
+echo "  3. Verify in G-code preview that all pause points are present (check: grep -c 'M400 U1' $OUT)"
 echo "  4. Print (operator handles UMTS install + page flips)"

@@ -10,7 +10,7 @@ Wrapped in same Bambu format as notebook.gcode (HEADER + CONFIG + EXECUTABLE)
 so it runs from SD card.
 
 Usage:
-  python3 scripts/calibration_gcode.py [--z-down 18.0] [--z-hop 3.0]
+  python3 scripts/calibration_gcode.py [--z-down 18.0] [--z-hop 3.0] [--soft-holder]
 
 After each run:
   - lines clean and pen lifts on travel → DONE, lock pen at current depth
@@ -26,12 +26,15 @@ from pathlib import Path
 
 # Inherit constants from svg_to_gcode.py for consistency
 sys.path.insert(0, str(Path(__file__).parent))
-from svg_to_gcode import (  # noqa: E402
-    Z_PEN_DOWN as DEFAULT_Z_DOWN,
-    Z_HOP as DEFAULT_Z_HOP,
-    PEN_OFFSET_X,
-    PEN_OFFSET_Y,
+import svg_to_gcode as plotter  # noqa: E402
+from holder_config import (  # noqa: E402
+    PARK_NOZZLE_X_MM,
+    PARK_NOZZLE_Y_MM,
+    travel_feed_mm_min,
+    z_travel_clearance,
+    z_travel_feed_mm_min,
 )
+from svg_to_gcode import apply_holder_profile  # noqa: E402
 
 # Safe pen-frame bounds — paper bounds for landscape (bed=256).
 # LINES below are in PEN frame (where ink lands). Pipeline applies offset
@@ -63,21 +66,30 @@ def validate_bounds() -> None:
 
 
 def pen_to_nozzle(x: float, y: float) -> tuple[float, float]:
-    """Convert pen-frame (X, Y) to nozzle-frame for gcode emission.
-    Pen is at nozzle + PEN_OFFSET, so nozzle = pen - PEN_OFFSET."""
-    return x - PEN_OFFSET_X, y - PEN_OFFSET_Y
+    """Convert pen-frame (X, Y) to nozzle-frame for gcode emission."""
+    return x - plotter.PEN_OFFSET_X, y - plotter.PEN_OFFSET_Y
 
 
-def build_gcode(z_down: float, z_hop: float) -> str:
+def build_gcode(
+    z_down: float,
+    z_hop: float,
+    z_clear: float,
+    park_x: float,
+    park_y: float,
+    travel_f: int,
+    z_travel_f: int,
+) -> str:
     z_up = z_down + z_hop
     body = []
     for x1_pen, y1_pen, x2_pen, y2_pen in LINES:
         x1, y1 = pen_to_nozzle(x1_pen, y1_pen)
         x2, y2 = pen_to_nozzle(x2_pen, y2_pen)
-        body.append(f"G0 X{x1:.3f} Y{y1:.3f} F18000")
-        body.append(f"G1 Z{z_down:.3f} F1200")
+        xy_f = travel_feed_mm_min()
+        z_f = z_travel_feed_mm_min()
+        body.append(f"G0 X{x1:.3f} Y{y1:.3f} F{xy_f}")
+        body.append(f"G1 Z{z_down:.3f} F{z_f}")
         body.append(f"G1 X{x2:.3f} Y{y2:.3f} F12000")
-        body.append(f"G1 Z{z_up:.3f} F1200")
+        body.append(f"G1 Z{z_up:.3f} F{z_f}")
     drawing = "\n".join(body) + "\n"
 
     return f"""; HEADER_BLOCK_START
@@ -119,12 +131,12 @@ M106 P2 S0
 M106 P3 S0
 M221 X0 Y0 Z0             ; soft endstops off
 G28                       ; home
-G1 Z25 F600               ; safe Z for module install
+G1 Z{z_clear:.1f} F600               ; safe Z for module install
 M104 S180                 ; nozzle 180°C (cold-extrusion guard)
 M109 S180
 
 ;===== install pause =====
-G0 X128 Y200 F18000
+G0 X{park_x:.0f} Y{park_y:.0f} F{travel_f}
 M400
 M400 U1                   ; install UMTS + pen, then Resume
 
@@ -135,8 +147,8 @@ M400 U1                   ; install UMTS + pen, then Resume
 M73 L1
 {drawing}
 ;===== final pause =====
-G1 Z50 F1200
-G0 X128 Y200 F18000
+G1 Z{z_clear:.1f} F{z_travel_f}
+G0 X{park_x:.0f} Y{park_y:.0f} F{travel_f}
 M400
 M73 P100 R0
 M400 U1                   ; remove UMTS, then Stop on LCD
@@ -150,19 +162,47 @@ M84
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--z-down", type=float, default=DEFAULT_Z_DOWN,
-                        help=f"pen-down nozzle Z (default {DEFAULT_Z_DOWN})")
-    parser.add_argument("--z-hop", type=float, default=DEFAULT_Z_HOP,
-                        help=f"Z-hop above pen-down (default {DEFAULT_Z_HOP})")
+    parser.add_argument(
+        "--soft-holder",
+        action="store_true",
+        help="KEV spring holder profile (same as svg_to_gcode --soft-holder)",
+    )
+    parser.add_argument(
+        "--z-down",
+        type=float,
+        default=None,
+        help="pen-down nozzle Z (default: active holder profile)",
+    )
+    parser.add_argument(
+        "--z-hop",
+        type=float,
+        default=None,
+        help="Z-hop above pen-down (default: active holder profile)",
+    )
     parser.add_argument("--out", default="output/calibration.gcode")
     args = parser.parse_args()
+
+    apply_holder_profile(soft_holder=args.soft_holder)
+    z_down = plotter.Z_PEN_DOWN if args.z_down is None else args.z_down
+    z_hop = plotter.Z_HOP if args.z_hop is None else args.z_hop
+    z_clear = z_travel_clearance(z_down)
 
     validate_bounds()
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build_gcode(args.z_down, args.z_hop))
-    print(f"✅ {out}  (Z_DOWN={args.z_down}, Z_HOP={args.z_hop})")
+    out.write_text(
+        build_gcode(
+            z_down,
+            z_hop,
+            z_clear,
+            PARK_NOZZLE_X_MM,
+            PARK_NOZZLE_Y_MM,
+            travel_feed_mm_min(),
+            z_travel_feed_mm_min(),
+        )
+    )
+    print(f"✅ {out}  (Z_DOWN={z_down}, Z_HOP={z_hop}, Z_travel={z_clear})")
     print(f"   Pattern: {len(LINES)} lines, X∈[{min(l[0] for l in LINES)}, "
           f"{max(l[2] for l in LINES)}], Y∈[{min(l[1] for l in LINES)}, "
           f"{max(l[3] for l in LINES)}] (within safe paper bounds)")

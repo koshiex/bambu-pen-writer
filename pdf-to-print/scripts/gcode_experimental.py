@@ -261,6 +261,11 @@ class WordCluster:
         return min(xs), min(ys), max(xs), max(ys)
 
 
+def _word_inline_is_y(force_axis: str | None) -> bool:
+    """True when words run left-to-right along gcode Y (default axis=x after portrait→landscape)."""
+    return force_axis != "y"
+
+
 def cluster_word_strokes(
     blocks: list[StrokeBlock],
     *,
@@ -303,12 +308,14 @@ def cluster_word_strokes(
                 cluster_idx.append(i)
         clusters.append(WordCluster(stroke_indices=cluster_idx))
 
+    inline_y = _word_inline_is_y(force_axis)
     out: list[WordCluster] = []
     for c in clusters:
         if len(c.stroke_indices) < word_min_strokes:
             continue
-        x0, _, x1, _ = c.bbox(blocks)
-        if (x1 - x0) < word_min_width_mm:
+        x0, y0, x1, y1 = c.bbox(blocks)
+        inline_span = (y1 - y0) if inline_y else (x1 - x0)
+        if inline_span < word_min_width_mm:
             continue
         out.append(c)
     return out
@@ -345,31 +352,51 @@ def build_strikethrough_block(
     z_range_mm: float,
     variable_pressure: bool,
     base_feed_mm_min: float,
-    x_overhang: float,
-    y_height_ratio: float,
+    inline_overhang_mm: float,
+    cross_jitter_ratio: float,
     points_per_char: int,
     char_width_mm: float,
+    force_axis: str | None,
     rng: random.Random,
 ) -> StrokeBlock:
+    """Strike line runs along the word (gcode Y when axis=x, gcode X when axis=y)."""
     x0, y0, x1, y1 = cluster.bbox(blocks)
-    width = max(x1 - x0, 1e-3)
-    y_center = 0.5 * (y0 + y1)
-    row_h = max(y1 - y0, 2.0)
-    y_line = y_center + y_height_ratio * 0.15 * row_h * rng.uniform(-0.3, 0.3)
-    n_chars = max(1, int(round(width / char_width_mm)))
+    inline_y = _word_inline_is_y(force_axis)
+    if inline_y:
+        inline_lo, inline_hi = y0, y1
+        inline_span = max(y1 - y0, 1e-3)
+        cross_center = 0.5 * (x0 + x1)
+        cross_span = max(x1 - x0, 1.0)
+    else:
+        inline_lo, inline_hi = x0, x1
+        inline_span = max(x1 - x0, 1e-3)
+        cross_center = 0.5 * (y0 + y1)
+        cross_span = max(y1 - y0, 1.0)
+
+    n_chars = max(1, int(round(inline_span / char_width_mm)))
     n_pts = max(3, n_chars * points_per_char)
-    xs = np.linspace(x0 - x_overhang, x1 + x_overhang, n_pts)
-    y_noise = interpolate_random(n_pts, max(2, n_pts // 5), rng)
+    inline_coords = np.linspace(
+        inline_lo - inline_overhang_mm, inline_hi + inline_overhang_mm, n_pts
+    )
+    cross_noise = interpolate_random(n_pts, max(2, n_pts // 5), rng)
+    cross_wobble = cross_jitter_ratio * 0.15 * cross_span
+
     points: list[tuple[float, float, float | None, float | None]] = []
-    for i, x in enumerate(xs):
-        y = y_line + 0.08 * row_h * (y_noise[i] if i < len(y_noise) else 0.0)
+    for i, inline_v in enumerate(inline_coords):
+        wobble = cross_wobble * (cross_noise[i] if i < len(cross_noise) else 0.0)
+        if inline_y:
+            x = cross_center + wobble
+            y = float(inline_v)
+        else:
+            x = float(inline_v)
+            y = cross_center + wobble
         z: float | None = None
         if variable_pressure:
             t = i / max(1, n_pts - 1)
-            force = _force_profile(t, y_noise[i] if i < len(y_noise) else 0.0)
+            force = _force_profile(t, cross_noise[i] if i < len(cross_noise) else 0.0)
             z = z_pen - force * z_range_mm
             z = max(z_pen - z_range_mm, min(z_pen, z))
-        points.append((float(x), float(y), z, base_feed_mm_min))
+        points.append((x, y, z, base_feed_mm_min))
     return make_stroke_block_from_polyline(points, z_pen=z_pen, z_up=z_up)
 
 
@@ -436,10 +463,11 @@ def apply_experimental_postprocess(
                     z_range_mm=params.pressure_z_range_mm,
                     variable_pressure=flags.variable_pressure,
                     base_feed_mm_min=base_feed_mm_min,
-                    x_overhang=params.strike_x_overhang_mm,
-                    y_height_ratio=params.strike_y_height_ratio,
+                    inline_overhang_mm=params.strike_x_overhang_mm,
+                    cross_jitter_ratio=params.strike_y_height_ratio,
                     points_per_char=params.strike_points_per_char,
                     char_width_mm=params.strike_char_width_mm,
+                    force_axis=reading_force_axis,
                     rng=rng,
                 )
             )

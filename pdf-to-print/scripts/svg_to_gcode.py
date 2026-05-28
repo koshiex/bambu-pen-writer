@@ -143,7 +143,7 @@ READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False
 
 # XY feed for pen-down moves (G1 … X Y F…). Marlin/Bambu use mm/min → mm/s × 60.
-DRAW_SPEED_MM_S = 400.0
+DRAW_SPEED_MM_S = 500.0
 DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
 
 # Pen-up: G0 XY and G1 Z (see holder_config TRAVEL_SPEED_MM_S / Z_TRAVEL_SPEED_MM_S).

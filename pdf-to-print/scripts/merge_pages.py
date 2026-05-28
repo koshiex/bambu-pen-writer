@@ -165,6 +165,9 @@ def main() -> None:
     soft_holder = args.soft_holder or os.environ.get(
         "PDF_TO_PRINT_SOFT_HOLDER", ""
     ).strip().lower() in ("1", "true", "yes", "on")
+    pause_beep = os.environ.get("PDF_TO_PRINT_PAUSE_BEEP", "1").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
     profile = select_profile(soft_holder=soft_holder)
     z_clear = z_travel_clearance_for_profile(profile)
 
@@ -201,6 +204,16 @@ def main() -> None:
     start = patch_holder_templates(read(tpl_dir / "bambu_start.gcode"), z_clear, **park_kw)
     end = patch_holder_templates(read(tpl_dir / "bambu_end.gcode"), z_clear, **park_kw)
     pause_tpl = patch_holder_templates(read(tpl_dir / "page_pause.gcode"), z_clear, **park_kw)
+
+    if not pause_beep:
+        pause_tpl = re.sub(
+            r"; --- page-flip alert beep.*?; --- end beep ---\n",
+            "", pause_tpl, flags=re.S,
+        )
+        end = re.sub(
+            r"; --- print-complete fanfare.*?; --- end fanfare ---\n",
+            "", end, flags=re.S,
+        )
 
     order_label = "spread (unfolded signature)" if args.page_order == "spread" else "sequential"
     start_label = f" from page {args.start_page}" if args.start_page > 1 else ""

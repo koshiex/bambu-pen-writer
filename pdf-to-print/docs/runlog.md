@@ -358,3 +358,24 @@ Park теперь на rear-center (Y=200) — далеко от front door glas
 - `output/notebook.gcode`: nozzle X∈[54.82, 248.93], Y∈[92.79, 247.15] ✓ 0 out-of-bed
 
 **Следующий шаг**: запустить alignment.gcode (без тетради) → замерить рулеткой положение рамки → должно быть 24мм от левого края bed и 50мм от переднего края. Если delta>2мм — подкрутить `PEN_OFFSET_X/Y` (пропорционально delta).
+
+---
+
+## 2026-05-27 — M1006 page-flip beep
+
+**Задача**: оператор пропускает паузы. Добавлен звуковой сигнал и инструкция по push-уведомлению.
+
+**M1006** возвращён в паузы (page-flip + end), **НЕ** в start. Звуковой subsystem сам по себе фризов не вызывал — фризы были от G29/M970.3/M974/M976/wipe (см. запись выше). M1006 в старте выкинут исключительно как "cosmetic".
+
+**Что добавлено**:
+- `templates/page_pause.gcode`: двухнотный chirp C5→G5 (~480 мс) перед `M400 U1`
+- `templates/bambu_end.gcode`: трезвучие C5-E5-G5 (~800 мс) перед финальным `M400 U1`
+- `scripts/merge_pages.py`: флаг `PDF_TO_PRINT_PAUSE_BEEP` (default `1`). При `0` — стрипает оба блока через `re.sub` по sentinel-комментариям
+
+**Push на телефон**: без правок GCode. `M400 U1` → P1S переходит в Paused → Bambu Handy шлёт push автоматически. Включить: Handy app → устройство → Уведомления → Пауза печати = ON.
+
+**Verification**:
+```bash
+grep -c 'M1006 S1' output/notebook.gcode   # expect 24 (23 flip + 1 end)
+PDF_TO_PRINT_PAUSE_BEEP=0 ./scripts/build.sh ... && grep -c 'M1006' output/notebook.gcode  # expect 0
+```

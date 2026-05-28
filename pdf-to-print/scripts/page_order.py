@@ -19,7 +19,7 @@ SPREAD_ORDER_24: list[int] = [
 ]
 
 # Sheet-swap points: first page of each loose-sheet group (start of each spread).
-SPREAD_BOUNDARIES: frozenset[int] = frozenset({1, 5, 9, 13, 17, 21})
+SPREAD_BOUNDARIES: frozenset[int] = frozenset({1, 3, 5, 7, 9, 11})
 
 PAGE_NUM_RE = re.compile(r"page_(\d+)\.gcode$", re.IGNORECASE)
 
@@ -89,10 +89,11 @@ def _self_test() -> None:
     assert spread_order(24, 24) == [24]
 
     assert is_spread_boundary(1)
-    assert is_spread_boundary(5)
-    assert is_spread_boundary(21)
+    assert is_spread_boundary(3)
+    assert is_spread_boundary(7)
+    assert is_spread_boundary(11)
     assert not is_spread_boundary(2)
-    assert not is_spread_boundary(3)
+    assert not is_spread_boundary(4)
 
     print("page_order: OK")
 

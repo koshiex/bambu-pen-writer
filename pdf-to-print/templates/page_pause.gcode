@@ -7,6 +7,12 @@ M106 S0                 ; fans off (belt-and-suspenders)
 M106 P2 S0
 M106 P3 S0
 M73 P{PROGRESS} R{REMAINING}   ; progress update for LCD
+; --- page-flip alert beep (M1006, P1S native buzzer) ---
+M1006 S1
+M1006 A60 B10 L180 C0 D0 M180 E0 F0 N180
+M1006 A67 B10 L300 C0 D0 M300 E0 F0 N300
+M1006 W
+; --- end beep ---
 M400 U1                 ; Bambu interactive pause — operator flips page, presses Resume on LCD
 M109 S180               ; re-assert nozzle temp on resume (cooldown protection)
 ;===== PAGE {NEXT_PAGE} =====

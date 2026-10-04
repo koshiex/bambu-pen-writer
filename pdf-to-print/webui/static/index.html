@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="api-token" content="{{TOKEN}}">
+  <meta name="color-scheme" content="light dark">
+  <title>Pen plotter · Bambu P1S</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Cpath d='M9 23.5l4-1 10-10a2.1 2.1 0 0 0-3-3l-10 10-1 4Z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <header class="appbar">
+    <div class="appbar-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/><path d="m14.5 6.5 3 3"/></svg>
+        </span>
+        <span class="brand-name">Pen plotter</span>
+        <span class="brand-device">Bambu P1S</span>
+      </div>
+      <div class="chips">
+        <span id="chip-demo" class="chip warn hidden">Демо-принтер</span>
+        <span id="chip-job" class="chip">Свободно</span>
+        <span id="chip-printer" class="chip">Принтер не подключён</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Разделы">
+    <div class="tabs-inner">
+      <button type="button" data-tab="build" class="active">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg>
+        <span>Сборка</span>
+      </button>
+      <button type="button" data-tab="files">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z"/></svg>
+        <span>Файлы</span>
+      </button>
+      <button type="button" data-tab="motion">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M8.2 18H16a3 3 0 0 0 0-6H8a3 3 0 0 1 0-6h7.8"/></svg>
+        <span>Предпросмотр движения</span>
+      </button>
+      <button type="button" data-tab="calib">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+        <span>Калибровка</span>
+      </button>
+      <button type="button" data-tab="printer">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v6H7z"/></svg>
+        <span>Принтер</span>
+      </button>
+    </div>
+  </nav>
+
+  <div id="banner" class="banner hidden" role="alert">
+    <div class="banner-inner">
+      <span class="banner-icon" aria-hidden="true">
+        <svg class="ico fill" viewBox="0 0 24 24"><rect x="6.5" y="5" width="3.6" height="14" rx="1"/><rect x="13.9" y="5" width="3.6" height="14" rx="1"/></svg>
+      </span>
+      <div class="banner-body">
+        <div class="banner-label">Пауза — нужно ваше действие</div>
+        <div id="banner-text"></div>
+      </div>
+      <div class="banner-actions">
+        <button type="button" id="banner-resume" class="primary big">Продолжить</button>
+        <button type="button" id="banner-stop" class="danger big">Стоп</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+
+<!-- ============================================================ Сборка -->
+<section id="tab-build" class="tab active">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head"><h2>Документ</h2></div>
+
+      <div class="field">
+        <div class="label-row">
+          <label for="pdf">PDF</label>
+          <button type="button" class="help" data-help="Документ с рукописным шрифтом, страница 165×205 мм. Новый файл — кнопкой «Загрузить PDF», он ляжет в pdfs/." aria-label="Справка">?</button>
+        </div>
+        <div class="pdf-row">
+          <select id="pdf"></select>
+          <label class="btn file-btn">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+            <span>Загрузить PDF</span>
+            <input type="file" id="pdf-upload" accept="application/pdf">
+          </label>
+        </div>
+      </div>
+
+      <div class="fields cols-2">
+        <div class="field">
+          <div class="label-row">
+            <label for="holder">Держатель</label>
+            <button type="button" class="help" data-help="Мягкий — основной (ручка смещена от сопла на −38.3/−21.1 мм, Z письма 74.2). UMTS — старый модуль (Z 40.7). Перепутать нельзя: ручка уйдёт на 33 мм ниже бумаги — проверка на модели это ловит." aria-label="Справка">?</button>
+          </div>
+          <select id="holder"><option value="soft">мягкий (основной)</option><option value="umts">UMTS</option></select>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="page_order">Порядок страниц</label>
+            <button type="button" class="help" data-help="Подряд — сшитая тетрадь, листаете 1→24. Развороты — тетрадь распорота: 6 разворотов по 4 страницы (1, 2, 23, 24…). Подсказка на паузе скажет, какую страницу класть." aria-label="Справка">?</button>
+          </div>
+          <select id="page_order"><option value="sequential">подряд (сшитая тетрадь)</option><option value="spread">развороты (распоротая, 24 стр.)</option></select>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Печать</div>
+        <div class="fields cols-2">
+          <div class="field">
+            <div class="label-row">
+              <label for="start_page">Начать со страницы</label>
+              <button type="button" class="help" data-help="Продолжить прерванную тетрадь с этой страницы (номер в PDF)." aria-label="Справка">?</button>
+            </div>
+            <input id="start_page" type="number" min="1" placeholder="1">
+          </div>
+          <div class="field">
+            <div class="label-row">
+              <label for="time_factor">Поправка времени</label>
+              <button type="button" class="help" data-help="Реальное время ÷ время модели. Засеките одну страницу и впишите отношение — остаток на экране принтера станет честным." aria-label="Справка">?</button>
+            </div>
+            <input id="time_factor" type="number" step="0.05" placeholder="1.0">
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Реалистичность <span class="badge">эксперимент</span></div>
+        <div class="switches">
+          <div class="switch-row">
+            <label class="switch"><input type="checkbox" id="pressure"><span>нажим</span></label>
+            <button type="button" class="help" data-help="Слегка меняет давление ручки вдоль штриха (±0.25 мм по Z) — линия живее. +0.3 мин на страницу." aria-label="Справка">?</button>
+          </div>
+          <div class="switch-row">
+            <label class="switch"><input type="checkbox" id="feedrate"><span>неровная скорость</span></label>
+            <button type="button" class="help" data-help="Чуть варьирует скорость пера вдоль штриха, как у живой руки." aria-label="Справка">?</button>
+          </div>
+          <div class="switch-row">
+            <label class="switch"><input type="checkbox" id="strikethrough"><span>зачёркивания</span></label>
+            <button type="button" class="help" data-help="Примерно 5 % слов получают дрожание и зачёркивание — имитация исправлений." aria-label="Справка">?</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Перо и проверка</h2></div>
+
+      <div class="group-title">Перо</div>
+      <div class="fields cols-3">
+        <div class="field">
+          <div class="label-row">
+            <label for="z_hop">Подъём пера</label>
+            <button type="button" class="help" data-help="На сколько мм поднимать ручку между штрихами. Главный рычаг времени: 6 → 3 мм ≈ −35 % времени. Минимум подбирается листом «Лесенка подъёма» (+0.5 мм запаса). Пусто — по держателю (мягкий: 6 мм)." aria-label="Справка">?</button>
+          </div>
+          <div class="affix"><input id="z_hop" type="number" step="0.1" placeholder="по держателю (6)"><span class="unit">мм</span></div>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="draw_speed">Скорость</label>
+            <button type="button" class="help" data-help="Скорость пера при письме, мм/с. На время почти не влияет (штрихи короткие), влияет на насыщенность гелевой линии. Подбирается листом «Скорости». По умолчанию 100." aria-label="Справка">?</button>
+          </div>
+          <div class="affix long"><input id="draw_speed" type="number" step="10" placeholder="100"><span class="unit">мм/с</span></div>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="draw_accel">Ускорение</label>
+            <button type="button" class="help tip-left" data-help="Разгон пера, мм/с². Меньше — ровнее мелкие буквы, чуть дольше печать. По умолчанию 5000." aria-label="Справка">?</button>
+          </div>
+          <div class="affix long"><input id="draw_accel" type="number" step="500" placeholder="5000"><span class="unit">мм/с²</span></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Проверка на модели</div>
+        <div class="fields cols-2">
+          <div class="field">
+            <div class="label-row">
+              <label for="l_stop_height">L-упор в модели</label>
+              <button type="button" class="help" data-help="Высота вашего упора, мм. Проверка на модели посмотрит, не заденет ли его держатель. Пусто — упор не учитывается." aria-label="Справка">?</button>
+            </div>
+            <div class="affix"><input id="l_stop_height" type="number" step="0.5" placeholder="нет"><span class="unit">мм</span></div>
+          </div>
+          <div class="field">
+            <div class="label-row">
+              <label for="reference">Эталон (уже печатался)</label>
+              <button type="button" class="help tip-left" data-help="Задание, которое уже успешно печаталось на этом принтере. Проверка не пустит голову за пределы его движений." aria-label="Справка">?</button>
+            </div>
+            <select id="reference"><option value="">—</option></select>
+          </div>
+        </div>
+      </div>
+
+      <p class="hint">Подъём подбирается листом «Лесенка подъёма», скорость — листом «Скорости» (вкладка «Калибровка»).</p>
+    </div>
+  </div>
+
+  <div class="actionbar">
+    <button type="button" id="build" class="primary big">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5Z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5Z"/></svg>
+      <span>Собрать тетрадь</span>
+    </button>
+    <span id="build-out" class="build-out"></span>
+  </div>
+
+  <div class="card" id="result-card">
+    <div class="card-head">
+      <h2>Результат</h2>
+      <span id="result-file" class="filetag"></span>
+    </div>
+    <div id="result-summary" class="result-summary">Соберите PDF или выберите файл на вкладке «Файлы».</div>
+    <div id="previews" class="previews"></div>
+  </div>
+</section>
+
+<!-- ============================================================ Файлы -->
+<section id="tab-files" class="tab">
+  <div class="card">
+    <div class="card-head">
+      <h2>Готовые задания</h2>
+      <span class="card-meta">G-code из папки output/</span>
+    </div>
+    <div class="table-wrap">
+      <table id="gcodes" class="table">
+        <thead><tr><th>Файл</th><th>Время</th><th>Модель</th><th>Размер</th><th class="th-actions"><span class="sr-only">Действия</span></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>Прочее</h2><span class="card-meta">отчёты, STL, схемы</span></div>
+    <ul id="others" class="links"></ul>
+  </div>
+  <div class="card hidden" id="report-card">
+    <div class="card-head">
+      <h2>Отчёт симуляции</h2>
+      <span id="report-name" class="filetag"></span>
+    </div>
+    <pre id="report"></pre>
+  </div>
+</section>
+
+<!-- ============================================================ Предпросмотр движения -->
+<section id="tab-motion" class="tab">
+  <div class="motion">
+    <div class="card stage">
+      <div class="stage-canvas">
+        <div class="bed"><canvas id="motion-canvas"></canvas></div>
+      </div>
+      <div class="transport">
+        <button type="button" id="motion-play" class="primary play">▶ Пуск</button>
+        <input type="range" id="motion-slider" min="0" max="1000" value="0" step="1" aria-label="Позиция по времени">
+        <span id="motion-time" class="time">0:00 / 0:00</span>
+        <select id="motion-speed" aria-label="Скорость воспроизведения">
+          <option value="1">×1</option>
+          <option value="10">×10</option>
+          <option value="60" selected>×60</option>
+          <option value="300">×300</option>
+          <option value="1000">×1000</option>
+        </select>
+        <canvas id="motion-strip"></canvas>
+      </div>
+    </div>
+
+    <aside class="motion-side">
+      <div class="card">
+        <div class="field">
+          <label for="motion-file" class="label">Файл</label>
+          <select id="motion-file"></select>
+        </div>
+        <div class="field">
+          <label for="motion-page" class="label">Страница</label>
+          <select id="motion-page"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="side-title">Статистика</h3>
+        <dl id="motion-stats" class="stats"></dl>
+      </div>
+
+      <div class="card">
+        <h3 class="side-title">Слои</h3>
+        <div class="switches column">
+          <label class="switch"><input type="checkbox" id="motion-show-travel" checked><span>холостые ходы</span></label>
+          <label class="switch"><input type="checkbox" id="motion-show-holder" checked><span>держатель</span></label>
+          <label class="switch"><input type="checkbox" id="motion-show-ghost" checked><span>вся страница бледно</span></label>
+          <label class="switch"><input type="checkbox" id="motion-follow"><span>следить за пером</span></label>
+        </div>
+        <div id="motion-legend" class="legend"></div>
+      </div>
+
+      <div class="card">
+        <h3 class="side-title">Проверка и паузы</h3>
+        <div id="motion-warnings" class="warnings"></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================================================ Калибровка -->
+<section id="tab-calib" class="tab">
+  <div class="intro">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.1"/></svg>
+    <p>Листы собираются для PDF, держателя и параметров пера из вкладки «Сборка». Перед началом включите на экране принтера режим <b>Standard</b>, затем идите по шагам слева направо.</p>
+  </div>
+
+  <div class="sheets">
+    <div class="card sheet">
+      <div class="sheet-head"><span class="step"></span><h3>Бенчмарк Z</h3>
+        <button type="button" class="help" data-help="Без ручки и бумаги. Секундомером засеките блоки A, B, C; перед C переключите на экране режим Ludicrous. Покажет, ускоряет ли он подъёмы." aria-label="Справка">?</button></div>
+      <p>Без ручки и бумаги, с секундомером: блоки A, B, C.</p>
+      <button type="button" data-sheet="zbench">Собрать лист</button>
+    </div>
+    <div class="card sheet">
+      <div class="sheet-head"><span class="step"></span><h3>Лесенка подъёма</h3>
+        <button type="button" class="help" data-help="Черновик на место тетради. Под блоком k — k засечек = подъём 1 / 1.5 / 2 / 2.5 / 3 / 4 / 6 мм. Возьмите минимум без протяжек и добавьте 0.5 мм." aria-label="Справка">?</button></div>
+      <p>Минимальный подъём пера без протяжек.</p>
+      <button type="button" data-sheet="hop-ladder">Собрать лист</button>
+    </div>
+    <div class="card sheet">
+      <div class="sheet-head"><span class="step"></span><h3>Скорости</h3>
+        <button type="button" class="help" data-help="Первая строка текста 5 раз: 50, 100, 150, 250, 500 мм/с. Выберите самую быструю, неотличимую от первой." aria-label="Справка">?</button></div>
+      <p>Строка текста на скоростях <span class="nowrap">50…500 мм/с</span>.</p>
+      <button type="button" data-sheet="speed">Собрать лист</button>
+    </div>
+    <div class="card sheet">
+      <div class="sheet-head"><span class="step"></span><h3>Проверка упора</h3>
+        <button type="button" class="help tip-left" data-help="Держатель БЕЗ ручки, тетрадь и упор на месте. Медленный обвод крайних точек текста — видно, не задевает ли держатель упор." aria-label="Справка">?</button></div>
+      <p>Держатель <b>без ручки</b>: обвод крайних точек текста.</p>
+      <button type="button" data-sheet="edge-check">Собрать лист</button>
+    </div>
+    <div class="card sheet">
+      <div class="sheet-head"><span class="step"></span><h3>Страница на замер</h3>
+        <button type="button" class="help tip-left" data-help="Одна страница отдельно — засечь реальное время и вписать поправку." aria-label="Справка">?</button></div>
+      <div class="field">
+        <div class="label-row">
+          <label for="sheet-page">Страница</label>
+          <button type="button" class="help tip-left" data-help="Номер страницы в PDF, которую напечатать отдельно для замера времени." aria-label="Справка">?</button>
+        </div>
+        <input id="sheet-page" type="number" min="1" value="5">
+      </div>
+      <button type="button" data-sheet="page">Собрать лист</button>
+    </div>
+  </div>
+
+  <div class="card lstop">
+    <div class="lstop-form">
+      <div class="card-head">
+        <h2>L-упор (STL)</h2>
+        <button type="button" class="help" data-help="Плоская L 190×190 мм, грани ровно на 24/50 мм от краёв пластины. Магниты в карманы снизу. 3 мм — не выше сложенной тетради." aria-label="Справка">?</button>
+        <span class="card-meta">оснастка, печатается один раз</span>
+      </div>
+      <p class="muted-text">Упор ставит тетрадь на столе всегда в одно и то же место. Соберите модель, скачайте STL и напечатайте её обычным пластиком.</p>
+      <div class="fields cols-3">
+        <div class="field">
+          <div class="label-row">
+            <label for="ls-height">Высота</label>
+            <button type="button" class="help" data-help="Высота над столом. 3 мм — не выше сложенной тетради, держатель проходит над ним." aria-label="Справка">?</button>
+          </div>
+          <div class="affix"><input id="ls-height" type="number" step="0.5" value="3"><span class="unit">мм</span></div>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="ls-md">Магнит Ø</label>
+            <button type="button" class="help" data-help="Диаметр магнита-диска, мм (карман +0.3 мм)." aria-label="Справка">?</button>
+          </div>
+          <div class="affix"><input id="ls-md" type="number" step="0.5" value="10"><span class="unit">мм</span></div>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="ls-mh">Магнит h</label>
+            <button type="button" class="help" data-help="Толщина магнита, мм (карман +0.1 мм, над ним 0.9 мм пластика)." aria-label="Справка">?</button>
+          </div>
+          <div class="affix"><input id="ls-mh" type="number" step="0.5" value="2"><span class="unit">мм</span></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="lstop">Собрать STL</button>
+        <a id="lstop-download" class="btn primary" href="#">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+          <span>Скачать L-упор (STL)</span>
+        </a>
+      </div>
+      <div id="lstop-links" class="links"></div>
+    </div>
+    <div class="lstop-preview-box">
+      <img id="lstop-preview" class="hidden" alt="схема размещения L-упора">
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ Принтер -->
+<section id="tab-printer" class="tab">
+  <div class="printer-grid">
+    <div class="col">
+      <div class="card">
+        <div class="card-head"><h2>Состояние</h2></div>
+        <div id="p-state" class="pstate">—</div>
+        <div class="progress"><div id="p-bar"></div></div>
+        <dl id="p-details" class="details"></dl>
+        <div id="p-devmode" class="warnbox hidden">На принтере выключен <b>Developer Mode</b>: статус виден, но старт/пауза/стоп из клиента будут отклонены. Включите на экране принтера: Настройки → LAN Only → Developer Mode. Или отправляйте «Только загрузить» и запускайте файл с экрана.</div>
+        <div id="p-error" class="errbox hidden"></div>
+        <div class="controls">
+          <div class="btn-group">
+            <button type="button" data-cmd="pause">
+              <svg class="ico fill" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="3.6" height="14" rx="1"/><rect x="13.9" y="5" width="3.6" height="14" rx="1"/></svg>
+              <span>Пауза</span>
+            </button>
+            <button type="button" data-cmd="resume" class="primary">
+              <svg class="ico fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7Z"/></svg>
+              <span>Продолжить</span>
+            </button>
+            <button type="button" data-cmd="stop" class="danger">
+              <svg class="ico fill" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              <span>Стоп</span>
+            </button>
+          </div>
+          <button type="button" id="camera-btn" class="push-right">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.5-2h5L16 7h2.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5Z"/><circle cx="12" cy="13" r="3.2"/></svg>
+            <span>Снимок камеры</span>
+          </button>
+        </div>
+        <img id="camera" class="camera hidden" alt="камера принтера">
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <div class="card-head"><h2>Отправить на печать</h2></div>
+        <div class="field">
+          <label for="send-file" class="label">Файл</label>
+          <select id="send-file"></select>
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="send-method">Способ отправки</label>
+            <button type="button" class="help" data-help="Загрузить и запустить: .3mf по FTPS + команда старта (нужен Developer Mode на принтере). Только загрузить: файл ляжет на SD, запуск с экрана принтера. Plain G-code — экспериментально." aria-label="Справка">?</button>
+          </div>
+          <select id="send-method">
+            <option value="3mf">загрузить и запустить (рекомендуется)</option>
+            <option value="upload">только загрузить (запуск с экрана принтера)</option>
+            <option value="gcode">plain G-code + gcode_file (экспериментально)</option>
+          </select>
+        </div>
+        <div class="switch-row danger-switch">
+          <label class="switch"><input type="checkbox" id="send-force"><span>без проверки на модели (опасно)</span></label>
+          <button type="button" class="help" data-help="Обойти проверку на модели. Только если точно понимаете, что делаете." aria-label="Справка">?</button>
+        </div>
+        <p class="hint">Перед стартом держатель снят: первая пауза — установка держателя с ручкой. Orca на время печати закройте (принтер держит ~2 подключения).</p>
+        <button type="button" id="send" class="primary big wide">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 3.5 10 14"/><path d="M20.5 3.5 14 20.5l-4-6.5-6.5-4 17-6.5Z"/></svg>
+          <span>Отправить</span>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Подключение</h2></div>
+        <div id="demo-note" class="hint hidden">Демо-режим: встроенный фейковый принтер, ускоренное время.</div>
+        <form id="p-config" autocomplete="off">
+          <details class="subcard">
+            <summary>
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><path d="M2 9a15 15 0 0 1 20 0"/><circle cx="12" cy="19.2" r=".8"/></svg>
+              <span>Настройки принтера</span>
+              <span class="summary-meta">IP, серийный номер, access code</span>
+            </summary>
+            <div class="subcard-body">
+              <div class="fields cols-2">
+                <div class="field">
+                  <div class="label-row">
+                    <label for="p-ip">IP принтера</label>
+                    <button type="button" class="help" data-help="Экран принтера → Настройки → WLAN." aria-label="Справка">?</button>
+                  </div>
+                  <input id="p-ip" placeholder="192.168.1.50">
+                </div>
+                <div class="field">
+                  <div class="label-row">
+                    <label for="p-serial">Серийный номер</label>
+                    <button type="button" class="help tip-left" data-help="Экран принтера → Настройки → Устройство." aria-label="Справка">?</button>
+                  </div>
+                  <input id="p-serial" placeholder="01P00...">
+                </div>
+              </div>
+              <div class="field">
+                <div class="label-row">
+                  <label for="p-code">Access code</label>
+                  <button type="button" class="help" data-help="Экран принтера → Настройки → LAN Only, 8 символов. Хранится только на этом компьютере." aria-label="Справка">?</button>
+                </div>
+                <div class="code-row">
+                  <input id="p-code" type="password" autocomplete="off" placeholder="8 символов с экрана">
+                  <button id="p-save" type="button">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </details>
+        </form>
+        <div class="actions">
+          <button type="button" id="p-connect" class="primary">Подключиться</button>
+          <button type="button" id="p-disconnect">Отключиться</button>
+          <button type="button" id="notify-btn" class="push-right">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9Z"/><path d="M10 19.5a2 2 0 0 0 4 0"/></svg>
+            <span>Включить уведомления</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="collapsed">
+  <div class="logbar">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4"/><path d="M12 16h7"/></svg>
+    <span id="log-title" class="log-title">Лог</span>
+    <button type="button" id="cancel" class="danger small hidden">Отменить</button>
+    <button type="button" id="log-toggle" class="small">Развернуть</button>
+  </div>
+  <pre id="log"></pre>
+</footer>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+<script src="/static/viewer.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

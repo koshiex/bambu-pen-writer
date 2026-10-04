@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import pipeline_api as api
 from .jobs import JobRunner
 from . import motion
-from .printer_link import PrinterConfig, PrinterLink, job_pages
+from .printer_link import JobMeta, PrinterConfig, PrinterLink, job_pages
 
 STATIC = Path(__file__).resolve().parent / "static"
 STATIC_FILES = {"app.js": "text/javascript", "viewer.js": "text/javascript", "style.css": "text/css"}
@@ -39,6 +39,7 @@ PAGE_CSP = ("default-src 'self'; img-src 'self' data:; connect-src 'self'; style
             "script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 FILE_CSP = "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'none'"
 INLINE_TYPES = ("image/png", "image/jpeg")
+START_CONFIRM_S = 30           # the printer reports RUNNING a few seconds after project_file
 
 
 class Broadcaster:
@@ -97,7 +98,7 @@ class App:
         self.runner = JobRunner(self.events.publish, api.ROOT)
         self.store = ConfigStore(home)
         self.link = PrinterLink(self._printer_update, pins=self.store.load().get("pins", {}),
-                                on_pins_changed=self._save_pins)
+                                on_pins_changed=self._save_pins, job_lookup=output_job)
         self.demo = demo
         self._last_printer: dict = {}
 
@@ -242,12 +243,30 @@ def act_printer_send(app: App, data: dict) -> dict:
         log(f"отправка {name} ({method}, порядок страниц {order})")
         meta = app.link.send_job(path, method, order, progress)
         log("файл на принтере: " + meta.remote)
-        log("команда запуска отправлена" if method != "upload" else
-            "загружено без запуска: выберите файл на экране принтера")
+        if method == "upload":
+            log("загружено без запуска: выберите файл на экране принтера")
+        elif app.link.wait_started(meta, START_CONFIRM_S):
+            log("принтер начал задание")
+        else:
+            log(f"команда запуска отправлена, но за {START_CONFIRM_S} с принтер не начал задание — "
+                "проверьте экран принтера")
         return {"remote": meta.remote, "pages": list(meta.pages)}
 
     job = app.runner.run_callable("send", f"Отправка {name} на принтер", task)
     return {"job": asdict(job)}
+
+
+def output_job(subtask: str) -> JobMeta | None:
+    """Job metadata for a printer subtask name (sent earlier from output/), None if unknown."""
+    try:
+        name = api.safe_name(f"{subtask}.gcode", ".gcode")      # the name comes from the printer
+    except ValueError:
+        return None
+    path = api.OUTPUT / name
+    if not path.is_file():
+        return None
+    pages = job_pages(path.read_text(errors="replace"))
+    return JobMeta(name, f"{subtask}.3mf", pages, api.page_order_of(pages), path.stat().st_mtime)
 
 
 _overviews: dict[tuple[str, float, str], dict] = {}

@@ -267,6 +267,12 @@ def test_cancel_keeps_runner_busy_until_process_exits() -> None:
     assert not runner.busy
 
 
+def test_output_job_rejects_printer_supplied_paths() -> None:
+    from webui.server import output_job
+    assert output_job("../../etc/passwd") is None
+    assert output_job("no_such_job_zz") is None
+
+
 def test_motion_endpoint_overview_and_page() -> None:
     (api.OUTPUT / "mv.gcode").write_text(job_text([1, 2]))
     code, ov = call("/api/motion?file=mv.gcode")

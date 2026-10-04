@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 import webbrowser
 from pathlib import Path
 
 from .server import App, serve, wait_forever
+
+
+def connect_saved(app: App) -> None:
+    """Reconnect to the saved printer on start (a client restart must not lose the job view)."""
+    try:
+        app.link.connect(app.printer_config())
+    except Exception as exc:  # noqa: BLE001 — printer off/unreachable: the «Подключиться» button stays
+        print(f"принтер не подключён автоматически: {exc}")
 
 
 def main() -> None:
@@ -35,6 +44,8 @@ def main() -> None:
     print(f"Pen plotter UI: {url}" + ("  (демо-принтер)" if demo else ""))
     if demo is not None:
         app.link.connect(app.printer_config())
+    elif app.printer_config() is not None:
+        threading.Thread(target=connect_saved, args=(app,), daemon=True).start()
     if not args.no_browser:
         webbrowser.open(url)
     try:

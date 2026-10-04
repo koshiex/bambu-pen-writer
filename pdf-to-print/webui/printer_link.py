@@ -27,8 +27,11 @@ from .mqtt_min import MqttClient, MqttConfig
 PAGE_MARKER = re.compile(r"^;=+ PAGE (\d+) =+", re.M)
 STAGES = {5: "пауза из G-code (M400)", 16: "пауза пользователя", 30: "пауза из G-code",
           6: "нет филамента", 17: "пауза: передняя крышка", 20: "пауза: ошибка температуры"}
-GCODE_PAUSE_STAGES = {5, 30}
+# Pauses with a known non-G-code cause. Any other stage during PAUSE is our M400 U1: a real P1S
+# reports stg_cur 255 there, not 5.
+OTHER_PAUSE_STAGES = set(STAGES) - {5, 30}
 IDLE_STATES = {"IDLE", "FINISH", "FAILED"}
+STARTED_STATES = {"PREPARE", "SLICING", "RUNNING", "PAUSE"}
 MAX_CAMERA_FRAME = 5 * 1024 * 1024
 SPREAD_SLOTS = ("левая, наружная", "левая, внутренняя", "правая, внутренняя", "правая, наружная")
 COMMANDS = ("pause", "resume", "stop")
@@ -107,12 +110,16 @@ def developer_mode(state: dict) -> bool | None:
         return None
 
 
+def is_gcode_pause(state: dict) -> bool:
+    return state.get("gcode_state") == "PAUSE" and state.get("stg_cur") not in OTHER_PAUSE_STAGES
+
+
 def pause_guidance(state: dict, meta: JobMeta | None, pauses_seen: int) -> str:
     """Operator instruction for the current pause, Russian."""
     if state.get("gcode_state") != "PAUSE":
         return ""
-    if state.get("stg_cur") not in GCODE_PAUSE_STAGES:
-        return f"Пауза: {STAGES.get(state.get('stg_cur'), 'причина неизвестна')}"
+    if not is_gcode_pause(state):
+        return f"Пауза: {STAGES[state['stg_cur']]}"
     foreign = meta is not None and state.get("subtask_name") not in (None, "", Path(meta.remote).stem)
     if meta is None or foreign:
         return "Пауза из задания (страница не определена: задание отправлено не отсюда)"
@@ -133,7 +140,10 @@ def pause_guidance(state: dict, meta: JobMeta | None, pauses_seen: int) -> str:
 class PrinterLink:
     def __init__(self, on_update: Callable[[dict], None], *, pins: dict | None = None,
                  on_pins_changed: Callable[[dict], None] | None = None,
-                 first_report_timeout: float = 8.0, reply_timeout: float = 5.0) -> None:
+                 first_report_timeout: float = 8.0, reply_timeout: float = 5.0,
+                 job_lookup: Callable[[str], JobMeta | None] | None = None) -> None:
+        """job_lookup(subtask_name) restores page guidance for a job that is already running
+        on the printer (client restarted mid-notebook)."""
         self.on_update = on_update
         self.pins = pins if pins is not None else {}
         self.on_pins_changed = on_pins_changed
@@ -149,6 +159,8 @@ class PrinterLink:
         self._conn_lock = threading.Lock()
         self._first_report = threading.Event()
         self._waiters: dict[str, list] = {}
+        self.job_lookup = job_lookup
+        self._looked_up = ""
 
     # ---- TLS pinning (trust on first use)
     def _pin(self, sock: ssl.SSLSocket, port: int) -> None:
@@ -218,21 +230,38 @@ class PrinterLink:
                 waiter[0].set()
             self.state.update({k: v for k, v in fields.items()
                                if k not in ("command", "result", "reason", "sequence_id")})
-            if before != "PAUSE" and self.state.get("gcode_state") == "PAUSE" \
-                    and self.state.get("stg_cur") in GCODE_PAUSE_STAGES:
+            self._recover_meta()
+            if before != "PAUSE" and is_gcode_pause(self.state):
                 self.pauses_seen += 1
         if "gcode_state" in self.state:
             self._first_report.set()
         self.on_update(self.summary())
 
+    def _recover_meta(self) -> None:
+        """Adopt the job running on the printer if it was sent earlier (by a previous run of the
+        client): only while it runs, so a just-sent job is never replaced by the previous one."""
+        name = self.state.get("subtask_name") or ""
+        if (self.job_lookup is None or not name or name == self._looked_up or self._ours()
+                or self.state.get("gcode_state") not in STARTED_STATES):
+            return
+        self._looked_up = name
+        found = self.job_lookup(name)
+        if found is not None:
+            self.meta, self.pauses_seen = found, 0
+
+    def _ours(self) -> bool:
+        return self.meta is not None and self.state.get("subtask_name") in (None, "", Path(self.meta.remote).stem)
+
     def summary(self) -> dict:
         s = self.state
         stage = s.get("stg_cur")
+        # a real P1S reports total_layer_num 1 for our jobs; pages come from the job itself
+        total = len(self.meta.pages) if self._ours() else s.get("total_layer_num")
         return {
             "online": self.online, "configured": self.cfg is not None, "error": self.error,
             "state": s.get("gcode_state", ""), "percent": s.get("mc_percent"),
             "remaining_min": s.get("mc_remaining_time"), "layer": s.get("layer_num"),
-            "total_layers": s.get("total_layer_num"), "stage": STAGES.get(stage, stage),
+            "total_layers": total, "stage": STAGES.get(stage, ""),     # 255/-1 = no stage on a real P1S
             "print_error": s.get("print_error") or 0, "hms": len(s.get("hms") or []),
             "job": s.get("subtask_name", ""), "nozzle": s.get("nozzle_temper"),
             "bed": s.get("bed_temper"),
@@ -280,6 +309,17 @@ class PrinterLink:
             self._publish(gcode_file_payload(remote, self._next_seq()))
         return meta
 
+    def wait_started(self, meta: JobMeta, timeout: float) -> bool:
+        """True once the printer reports the job running (the start command has no reliable ack)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                state, name = self.state.get("gcode_state"), self.state.get("subtask_name")
+            if state in STARTED_STATES and name in (None, "", Path(meta.remote).stem):
+                return True
+            time.sleep(0.2)
+        return False
+
     def camera_jpeg(self, timeout: float = 10.0) -> bytes:
         """One frame from the chamber camera (TLS on 6000, 80-byte auth packet)."""
         if self.cfg is None:
@@ -314,7 +354,9 @@ class PrinterLink:
         if wait_reply:
             self._waiters[seq] = waiter
         try:
-            self.client.publish(f"device/{self.cfg.serial}/request", json.dumps(msg).encode())
+            # wait=0: a real P1S may never PUBACK a request it executes (project_file); the
+            # reply with our sequence_id or the status change is the confirmation.
+            self.client.publish(f"device/{self.cfg.serial}/request", json.dumps(msg).encode(), wait=0)
             if not wait_reply or not waiter[0].wait(self.reply_timeout):
                 return None
         finally:

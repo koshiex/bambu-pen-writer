@@ -184,9 +184,13 @@ class FakePrinter:
 
     def __init__(self, serial: str = "01P00TEST000001", access_code: str = "12345678",
                  time_scale: float = 0.0, reject_commands: bool = False,
-                 tls: tuple[Path, Path] | None = None) -> None:
+                 tls: tuple[Path, Path] | None = None, *, puback: bool = True,
+                 pause_stage: int = 5, report_layers: bool = True) -> None:
+        """puback=False, pause_stage=255, report_layers=False mimic a real P1S: no PUBACK for
+        requests, M400 U1 pauses with stg_cur 255, layer_num stuck at 0 of 1."""
         self.serial, self.access_code, self.time_scale = serial, access_code, time_scale
         self.reject_commands = reject_commands
+        self.puback, self.pause_stage, self.report_layers = puback, pause_stage, report_layers
         self.ctx = _server_ctx(tls)
         self.state = FakePrinterState()
         if reject_commands:
@@ -231,7 +235,7 @@ class FakePrinter:
                     conn.sendall(packet(PINGRESP, b""))
                 elif kind == PUBLISH:
                     topic, payload, qos, pid = parse_publish(first, body)
-                    if qos == 1:
+                    if qos == 1 and self.puback:
                         conn.sendall(packet(PUBACK, struct.pack("!H", pid)))
                     if topic == f"device/{self.serial}/request":
                         self._command(json.loads(payload))
@@ -283,7 +287,7 @@ class FakePrinter:
             elif name == "pause" and self.state.gcode_state == "RUNNING":
                 self._set(gcode_state="PAUSE", stg_cur=16)
             elif name == "resume" and self.state.gcode_state == "PAUSE":
-                if self._job is not None and self.state.stg_cur == 5:
+                if self._job is not None and self.state.stg_cur == self.pause_stage:
                     self._job.index += 1
                 self._set(gcode_state="RUNNING", stg_cur=0)
             elif name == "stop":
@@ -302,7 +306,7 @@ class FakePrinter:
         self._job = _Job(name, segments, total=sum(s for s, _ in segments))
         layers = max((layer for _, layer in segments), default=0)
         self._set(gcode_state="RUNNING", subtask_name=Path(name).stem, gcode_file=name,
-                  total_layer_num=layers, layer_num=0, mc_percent=0, print_error=0, stg_cur=0)
+                  total_layer_num=layers if self.report_layers else 1, layer_num=0, mc_percent=0, print_error=0, stg_cur=0)
 
     def _set(self, **fields) -> None:
         for k, v in fields.items():
@@ -326,7 +330,7 @@ class FakePrinter:
                 job.elapsed = done_before + seconds
                 self._progress(job, job.elapsed, layer)
                 if job.index < len(job.segments) - 1:
-                    self._set(gcode_state="PAUSE", stg_cur=5)      # M400 U1
+                    self._set(gcode_state="PAUSE", stg_cur=self.pause_stage)      # M400 U1
                 else:
                     self._job = None
                     self._set(gcode_state="FINISH", mc_percent=100, mc_remaining_time=0)
@@ -334,7 +338,7 @@ class FakePrinter:
     def _progress(self, job: _Job, elapsed: float, layer: int | None = None) -> None:
         pct = int(100 * elapsed / job.total) if job.total else 100
         fields = {"mc_percent": pct, "mc_remaining_time": int((job.total - elapsed) / 60)}
-        if layer is not None:
+        if layer is not None and self.report_layers:
             fields["layer_num"] = layer
         if any(getattr(self.state, k) != v for k, v in fields.items()):
             self._set(**fields)

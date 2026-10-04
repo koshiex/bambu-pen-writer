@@ -348,6 +348,81 @@ def test_tls_path_with_pinned_certificate() -> None:
             fake.close()
 
 
+def test_real_p1s_quirks_no_puback_stage_255_no_layers() -> None:
+    # Observed on a real P1S: no PUBACK for project_file although the job started, M400 U1
+    # pauses report stg_cur 255, layer_num stays 0 (total 1).
+    fake = FakePrinter(puback=False, pause_stage=255, report_layers=False)
+    link, _ = connected(fake)
+    try:
+        wait_for(lambda: link.summary()["state"] == "IDLE")
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "nb.gcode"
+            g.write_text(job_text([1, 2]))
+            meta = link.send_job(g, "3mf", "sequential")
+        assert link.wait_started(meta, timeout=5.0)
+        assert link.summary()["total_layers"] == 2, link.summary()      # pages, not the printer's 1
+        for text in ("Установите держатель", "страницу 02", "снимите держатель"):
+            wait_for(lambda: link.summary()["state"] == "PAUSE" and text in link.summary()["guidance"])
+            link.command("resume")
+            wait_for(lambda: text not in link.summary()["guidance"])
+        wait_for(lambda: link.summary()["state"] == "FINISH")
+    finally:
+        link.disconnect()
+        fake.close()
+
+
+def test_wait_started_is_false_when_the_printer_stays_idle() -> None:
+    fake = FakePrinter()
+    link, _ = connected(fake)
+    try:
+        wait_for(lambda: link.summary()["state"] == "IDLE")
+        meta = JobMeta("nb.gcode", "nb.3mf", (1,), "sequential", 0.0)
+        assert not link.wait_started(meta, timeout=0.3)
+    finally:
+        link.disconnect()
+        fake.close()
+
+
+def test_restarted_client_recovers_the_running_job_from_output() -> None:
+    fake = FakePrinter(pause_stage=255)
+    first, _ = connected(fake)
+    with tempfile.TemporaryDirectory() as td:
+        g = Path(td) / "nb.gcode"
+        g.write_text(job_text([1, 2]))
+        lookups: list[str] = []
+
+        def lookup(stem: str) -> JobMeta | None:
+            lookups.append(stem)
+            return JobMeta(g.name, stem + ".3mf", job_pages(g.read_text()), "sequential", 0.0) \
+                if stem == "nb" else None
+
+        second = PrinterLink(lambda _s: None, job_lookup=lookup)
+        try:
+            wait_for(lambda: first.summary()["state"] == "IDLE")
+            first.send_job(g, "3mf", "sequential")
+            wait_for(lambda: first.summary()["state"] == "PAUSE")
+            first.command("resume")
+            first.disconnect()                                  # the old client is gone
+            second.connect(PrinterConfig("127.0.0.1", fake.serial, CODE, mqtt_port=fake.port,
+                                         ftp_port=fake.ftp.port, use_tls=False))
+            wait_for(lambda: "страницу 02" in second.summary()["guidance"])
+            assert second.summary()["sent_job"] == "nb.gcode"
+            assert lookups.count("nb") == 1, lookups            # looked up once, not per report
+        finally:
+            second.disconnect()
+            first.disconnect()
+            fake.close()
+
+
+def test_guidance_treats_unknown_stage_pause_as_gcode_pause() -> None:
+    meta = JobMeta("nb.gcode", "nb.3mf", (1, 2), "sequential", 0.0)
+    st = {"gcode_state": "PAUSE", "stg_cur": 255, "layer_num": 0, "subtask_name": "nb"}
+    assert "Установите держатель" in pause_guidance(st, meta, 1)
+    assert "страницу 02" in pause_guidance(st, meta, 2)
+    st["stg_cur"] = 16
+    assert "пользователя" in pause_guidance(st, meta, 2)
+
+
 def main() -> None:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     for name, fn in tests:

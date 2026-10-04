@@ -29,13 +29,16 @@ UMTS = HolderProfile(
 
 # KEV / MakerWorld soft spring holder (Stabilo fine-liner), caliper ~2026-05.
 SOFT_HOLDER_Z_EXTRA_MM = 33.5  # vs UMTS_Z_PEN_DOWN (caliper, soft spring holder)
+# Hop-ladder sheet 2026-10-04: streaks at 1.5 mm in part of the block, clean from 2.0 mm;
+# +0.5 mm margin for paper waviness (raise it if a notebook bulges near the spine).
+SOFT_HOLDER_Z_HOP = 2.5
 
 SOFT_HOLDER = HolderProfile(
     name="soft-holder",
     pen_offset_x=-38.34,
     pen_offset_y=-21.13,
     z_pen_down=UMTS_Z_PEN_DOWN + SOFT_HOLDER_Z_EXTRA_MM,
-    z_hop=UMTS_Z_HOP / 2.0,
+    z_hop=SOFT_HOLDER_Z_HOP,
 )
 
 

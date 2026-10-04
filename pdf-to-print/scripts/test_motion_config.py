@@ -43,7 +43,8 @@ def raises_value_error(fn) -> bool:
 
 def test_defaults() -> None:
     with env():
-        assert hc.z_hop_for(hc.SOFT_HOLDER) == hc.SOFT_HOLDER.z_hop == 6.0
+        assert hc.z_hop_for(hc.SOFT_HOLDER) == hc.SOFT_HOLDER.z_hop == 2.5   # hop-ladder 2026-10-04
+        assert hc.z_hop_for(hc.UMTS) == 12.0
         assert hc.draw_speed_mm_s() == 100.0
         assert hc.draw_accel_mm_s2() == 5000.0
 
@@ -78,7 +79,7 @@ def test_svg_to_gcode_uses_hop_and_speed() -> None:
         assert plotter.DRAW_FEED_MM_MIN == 7200
     with env():
         plotter.apply_holder_profile(soft_holder=True)
-        assert plotter.Z_HOP == 6.0
+        assert plotter.Z_HOP == 2.5
 
 
 def test_merge_emits_draw_acceleration() -> None:

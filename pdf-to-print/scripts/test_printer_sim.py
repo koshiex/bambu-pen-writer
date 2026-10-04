@@ -67,6 +67,16 @@ def test_travel_with_pen_down_is_a_drag() -> None:
     assert "DRAG" in codes(r), r.errors
 
 
+def test_default_compression_matches_hop_ladder() -> None:
+    # Soft holder, hop-ladder 2026-10-04: streaks at 1.5 mm hop, clean at 2.0 mm.
+    assert SimConfig(holder="soft").pen_down_compression_mm == 2.0
+    low = stroke([(60, 100), (70, 100)], z_up=ZD + 1.5) + stroke([(90, 100), (95, 100)], z_up=ZD + 1.5)
+    assert "DRAG" in codes(simulate_job(job([low]), SimConfig(holder="soft")))
+    ok = stroke([(60, 100), (70, 100)], z_up=ZD + 2.5) + stroke([(90, 100), (95, 100)], z_up=ZD + 2.5)
+    r = simulate_job(job([ok]), SimConfig(holder="soft"))
+    assert "DRAG" not in codes(r) and not r.warnings, (r.errors, r.warnings)
+
+
 def test_hop_smaller_than_spring_compression_drags() -> None:
     low = stroke([(60, 100), (70, 100)], z_up=ZD + 0.5) + stroke([(90, 100), (95, 100)])
     r = simulate_job(job([low]), SimConfig(holder="soft", pen_down_compression_mm=1.0))

@@ -22,13 +22,14 @@ from holder_config import (PARK_NOZZLE_X_MM, PARK_NOZZLE_Y_MM, select_profile,  
 from l_stop_model import JigParams, jig_outline  # noqa: E402
 from page_order import SPREAD_ORDER_24  # noqa: E402
 from plot_time_sim import timeline  # noqa: E402
+from printer_sim import SimConfig  # noqa: E402
 
 from .printer_link import JobMeta, pause_guidance  # noqa: E402
 
 PAGE_RE = re.compile(r"^;=+ PAGE (\d+) =+")
 ACCEL_RE = re.compile(r"^M204\s+S(\d+(?:\.\d+)?)", re.I)
 ERROR_RE = re.compile(r"^- `(\w+)` line (\d+): (.*)$")
-PEN_COMPRESSION_MM = 1.0          # same assumption as printer_sim (pen touches below z_pen + 1)
+PEN_COMPRESSION_MM = SimConfig.pen_down_compression_mm   # same contact model as printer_sim
 HOLDER_RADIUS_MM = 12.0
 BED_MM = (256, 256)
 NOZZLE_RANGE = (0.0, 0.0, 265.0, 265.0)

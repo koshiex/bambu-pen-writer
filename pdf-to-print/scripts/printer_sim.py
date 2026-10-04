@@ -78,7 +78,9 @@ class StopBox:
 class SimConfig:
     holder: str                              # "soft" | "umts"
     paper_thickness_mm: float = 3.0          # stack under the active page (notebook folded back)
-    pen_down_compression_mm: float = 1.0     # assumption: spring compression at Z_PEN_DOWN
+    # spring compression at Z_PEN_DOWN: the pen still touches up to Z_PEN_DOWN + this. Soft holder
+    # hop-ladder 2026-10-04: streaks at a 1.5 mm hop, clean at 2.0 mm.
+    pen_down_compression_mm: float = 2.0
     spring_travel_mm: float = 4.0            # assumption: max compression before bottoming out
     pen_protrusion_mm: float = 10.0          # assumption: free pen tip below holder body
     holder_radius_mm: float = 12.0           # assumption: holder footprint around the pen axis

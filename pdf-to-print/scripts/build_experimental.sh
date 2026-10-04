@@ -37,7 +37,7 @@ export PDF_TO_PRINT_PAGE_ORDER=spread
 export PDF_TO_PRINT_SOFT_HOLDER=1
 export OUT_SUFFIX=_experimental
 
-PDF="${1:-pdfs/2.pdf}"
+PDF="${1:-}"
 EXTRACT="${3:-raster}"
 
 echo ">>> build_experimental: pressure + feedrate + strikethrough, spread, soft-holder"

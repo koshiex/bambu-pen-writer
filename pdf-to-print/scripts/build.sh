@@ -33,7 +33,18 @@
 
 set -euo pipefail
 
-PDF="${1:-pdfs/2.pdf}"
+if [[ -n "${1:-}" ]]; then
+  PDF="$1"
+else
+  shopt -s nullglob
+  _PDFS=(pdfs/*.pdf)
+  case "${#_PDFS[@]}" in
+    0) echo "ERROR: no pdfs/*.pdf found and no PDF arg given" >&2; exit 1 ;;
+    1) PDF="${_PDFS[0]}" ;;
+    *) echo "ERROR: multiple PDFs in pdfs/ — pass one explicitly: ./scripts/build.sh pdfs/NAME.pdf" >&2
+       printf "  %s\n" "${_PDFS[@]}" >&2; exit 1 ;;
+  esac
+fi
 PDF_STEM="$(basename "$PDF" .pdf)"
 
 START_PAGE="${START_PAGE:-1}"
@@ -109,9 +120,10 @@ fi
 echo ">>> Phase 0: e2e smoke (synthetic SVG -> G-code -> strict reading-order)"
 python3 scripts/e2e_reading_order_pipeline.py
 
+PNG_DIR="build/${PDF_STEM}/png"
 echo ">>> Phase 1: extracting PDF pages to SVG (mode=$EXTRACT)"
 if [[ "$EXTRACT" == "raster" ]]; then
-  ./scripts/extract_pages_raster.sh "$PDF" "$SVG_DIR"
+  PNG_KEEP_DIR="$PNG_DIR" ./scripts/extract_pages_raster.sh "$PDF" "$SVG_DIR"
 else
   ./scripts/extract_pages.sh "$PDF" "$SVG_DIR"
 fi
@@ -159,6 +171,27 @@ else
 fi
 python3 scripts/merge_pages.py --gcode-dir "$GCODE_DIR" --templates-dir templates --out "$OUT" \
   --page-order "$PAGE_ORDER" --start-page "$START_PAGE" "${HOLDER_OPTS[@]}"
+
+echo ""
+# Phase 4: dry-run the whole job on the printer/pen/paper model (scripts/printer_sim.py).
+# Env: PDF_TO_PRINT_SIMULATE=0 skips; PDF_TO_PRINT_SIM_REFERENCE=<job run on hardware> adds the
+# motion-envelope check; PDF_TO_PRINT_SIM_L_STOP_HEIGHT=<mm> models the L-stop.
+if [[ "${PDF_TO_PRINT_SIMULATE:-1}" == "1" ]]; then
+  SIM_REPORT="${OUT%.gcode}.sim.md"
+  SIM_HOLDER=umts
+  [[ ${#HOLDER_OPTS[@]} -gt 0 ]] && SIM_HOLDER=soft
+  SIM_OPTS=(--holder "$SIM_HOLDER" --report "$SIM_REPORT")
+  # page renders (source glyphs grey, ink black, problems red/blue) for review / the web UI
+  [[ -d "$PNG_DIR" && "$EXTRACT" == "raster" ]] && SIM_OPTS+=(--png-dir "$PNG_DIR" --render-dir "build/${PDF_STEM}/sim")
+  [[ -n "${PDF_TO_PRINT_SIM_REFERENCE:-}" ]] && SIM_OPTS+=(--reference "$PDF_TO_PRINT_SIM_REFERENCE")
+  [[ -n "${PDF_TO_PRINT_SIM_L_STOP_HEIGHT:-}" ]] && SIM_OPTS+=(--l-stop-height "$PDF_TO_PRINT_SIM_L_STOP_HEIGHT")
+  echo ">>> Phase 4: printer simulation (holder=$SIM_HOLDER) -> $SIM_REPORT"
+  python3 scripts/printer_sim.py "$OUT" "${SIM_OPTS[@]}" > /dev/null || {
+    echo "ERROR: printer simulation FAILED — see $SIM_REPORT; do not print this file" >&2
+    exit 1
+  }
+  echo "  OK: $(head -1 "$SIM_REPORT")"
+fi
 
 echo ""
 echo "✅ DONE: $OUT"

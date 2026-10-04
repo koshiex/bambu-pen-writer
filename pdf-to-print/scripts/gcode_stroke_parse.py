@@ -274,3 +274,40 @@ def parse_stroke_polylines(path: Path, z_pen: float, z_up: float) -> list[np.nda
     """One complex ndarray per vpype line (first vertex from G0, then G1 XY until Z lift)."""
     blocks, _ = parse_stroke_blocks(path, z_pen, z_up, stop_at_experimental_marker=True)
     return [b.polyline_xy() for b in blocks if len(b.polyline_xy()) >= 1]
+
+
+def detect_pen_levels(path: Path) -> tuple[float, float]:
+    """(pen-down Z, pen-up Z) of a page G-code, read from the file itself.
+
+    Pen-down = Z-only G1 right after a G0 travel; pen-up = Z-only G1 right after a drawing
+    G1 XY. Most common value wins. Raises ValueError when the file has no pen stroke.
+    """
+    downs: dict[float, int] = {}
+    ups: dict[float, int] = {}
+    prev = ""
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = _strip_comment(raw)
+        if _is_g0(line):
+            prev = "G0"
+        elif _is_g1(line):
+            z = _extract_z(line)
+            if _extract_xy(line) is not None:
+                prev = "DRAW"
+            elif z is not None:
+                target = downs if prev == "G0" else ups if prev == "DRAW" else None
+                if target is not None:
+                    target[round(z, 3)] = target.get(round(z, 3), 0) + 1
+                prev = "Z"
+    if not downs or not ups:
+        raise ValueError(f"{path}: no pen stroke (G0 → G1 Z → G1 XY → G1 Z) found")
+    return max(downs, key=downs.get), max(ups, key=ups.get)
+
+
+def require_pen_down(path: Path, expected_z: float, holder: str) -> tuple[float, float]:
+    """Pen levels of `path`; ValueError if it was built for another holder (pen-down Z differs)."""
+    z_pen, z_up = detect_pen_levels(path)
+    if abs(z_pen - expected_z) > Z_TOL:
+        raise ValueError(
+            f"{path.name}: pen-down Z{z_pen:g} but holder '{holder}' writes at Z{expected_z:g} — "
+            f"pages were built for another holder; rebuild them with the holder you mount")
+    return z_pen, z_up

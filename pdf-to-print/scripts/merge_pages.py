@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import sys
@@ -46,14 +47,18 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+from gcode_stroke_parse import require_pen_down  # noqa: E402
 from holder_config import (  # noqa: E402
     PARK_NOZZLE_X_MM,
     PARK_NOZZLE_Y_MM,
+    draw_accel_mm_s2,
+    env_float_in_range,
     select_profile,
     travel_feed_mm_min,
     z_travel_feed_mm_min,
     z_travel_clearance_for_profile,
 )
+from plot_time_sim import estimate_file  # noqa: E402
 from page_order import (  # noqa: E402
     SPREAD_BOUNDARIES,
     is_spread_boundary,
@@ -103,13 +108,14 @@ def patch_header(template: str, n_pages: int, total_min: int) -> str:
 
 
 def motion_limits() -> str:
-    """P1S motion limits — verbatim from benchy. Firmware uses these to validate
-    speeds in user G-code."""
+    """P1S motion limits — verbatim from benchy (firmware validates speeds against them),
+    then the pen acceleration (M204 S, env PDF_TO_PRINT_DRAW_ACCEL_MM_S2)."""
     return (
         "M201 X20000 Y20000 Z500 E5000\n"
         "M203 X500 Y500 Z20 E30\n"
         "M204 P20000 R5000 T20000\n"
         "M205 X9.00 Y9.00 Z3.00 E2.50\n"
+        f"M204 S{draw_accel_mm_s2():g} ; pen XY acceleration (quality vs speed)\n"
         "M106 S0\n"
         "M106 P2 S0\n"
         "; FEATURE: Custom\n"
@@ -132,13 +138,76 @@ def layer_marker(layer_num: int, z_height: float = 25.0) -> str:
     )
 
 
+TIME_FACTOR_ENV = "PDF_TO_PRINT_TIME_FACTOR"
+TIME_FACTOR_RANGE = (0.5, 5.0)
+
+
+def time_factor() -> float:
+    """Real/simulated time ratio; set after timing one real page (default 1.0)."""
+    return env_float_in_range(TIME_FACTOR_ENV, 1.0, TIME_FACTOR_RANGE)
+
+
+def pause_beep_enabled() -> bool:
+    return os.environ.get("PDF_TO_PRINT_PAUSE_BEEP", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def job_templates(tpl_dir: Path, z_clear: float, pause_beep: bool) -> tuple[str, str, str]:
+    """(start, page-pause, end) templates with holder placeholders filled; beeps optional.
+
+    Shared by the notebook merge and calibration_sheets_gcode.py so both emit the same
+    install / pause / removal sequence.
+    """
+    park_kw = dict(park_x=PARK_NOZZLE_X_MM, park_y=PARK_NOZZLE_Y_MM,
+                   travel_f=travel_feed_mm_min(), z_travel_f=z_travel_feed_mm_min())
+    start = patch_holder_templates(read(tpl_dir / "bambu_start.gcode"), z_clear, **park_kw)
+    end = patch_holder_templates(read(tpl_dir / "bambu_end.gcode"), z_clear, **park_kw)
+    pause_tpl = patch_holder_templates(read(tpl_dir / "page_pause.gcode"), z_clear, **park_kw)
+    if not pause_beep:
+        pause_tpl = re.sub(r"; --- page-flip alert beep.*?; --- end beep ---\n", "", pause_tpl, flags=re.S)
+        end = re.sub(r"; --- print-complete fanfare.*?; --- end fanfare ---\n", "", end, flags=re.S)
+    return start, pause_tpl, end
+
+
+def check_pages_holder(pages: list[Path], z_pen_down: float, holder: str) -> None:
+    """ValueError if any page was built for another holder (its pen-down Z differs)."""
+    for page in pages:
+        require_pen_down(page, z_pen_down, holder)
+
+
+def estimate_page_minutes(pages: list[Path], flat: float | None) -> tuple[list[float], list[str]]:
+    """Per-page minutes: flat value, or planner simulation of each page × time factor."""
+    if flat is not None:
+        return [flat] * len(pages), [f"{flat:.1f} min (flat --minutes-per-page)"] * len(pages)
+    accel = draw_accel_mm_s2()
+    factor = time_factor()
+    minutes: list[float] = []
+    notes: list[str] = []
+    for page in pages:
+        t = estimate_file(page, accel)
+        m = t.total / 60.0 * factor
+        minutes.append(m)
+        notes.append(f"{m:.1f} min (sim×{factor:g}: Z {t.z / 60:.1f}, draw {t.draw / 60:.1f}, "
+                     f"travel {t.travel / 60:.1f}; {t.pen_downs} pen-downs)")
+    return minutes, notes
+
+
+def remaining_minutes(page_min: list[float], done: int) -> int:
+    return int(math.ceil(sum(page_min[done:]) - 1e-9))
+
+
+def progress_percent(page_min: list[float], done: int) -> int:
+    total = sum(page_min)
+    return int(100 * sum(page_min[:done]) / total) if total > 0 else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gcode-dir", default="build/gcode")
     parser.add_argument("--templates-dir", default="templates")
     parser.add_argument("--out", default="output/notebook.gcode")
-    parser.add_argument("--minutes-per-page", type=int, default=15,
-                        help="rough estimate per page for M73 remaining-time")
+    parser.add_argument("--minutes-per-page", type=float, default=None,
+                        help="flat per-page estimate for M73 (default: planner simulation × "
+                             "PDF_TO_PRINT_TIME_FACTOR)")
     parser.add_argument(
         "--page-order",
         choices=("sequential", "spread"),
@@ -165,9 +234,6 @@ def main() -> None:
     soft_holder = args.soft_holder or os.environ.get(
         "PDF_TO_PRINT_SOFT_HOLDER", ""
     ).strip().lower() in ("1", "true", "yes", "on")
-    pause_beep = os.environ.get("PDF_TO_PRINT_PAUSE_BEEP", "1").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
     profile = select_profile(soft_holder=soft_holder)
     z_clear = z_travel_clearance_for_profile(profile)
 
@@ -186,8 +252,13 @@ def main() -> None:
 
     pages = page_paths(gcode_dir, args.page_order, start_page=args.start_page)
     n = len(pages)
-    mpp = args.minutes_per_page
-    total_min = n * mpp
+    try:
+        check_pages_holder(pages, profile.z_pen_down, profile.name)
+        page_min, page_notes = estimate_page_minutes(pages, args.minutes_per_page)
+        motion = motion_limits()
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+    total_min = remaining_minutes(page_min, 0)
 
     # Required Bambu blocks
     header = read(tpl_dir / "bambu_header_block.gcode")
@@ -195,25 +266,7 @@ def main() -> None:
     config = read(tpl_dir / "bambu_config_block.gcode")
 
     # Our content (Z lift scales with holder — soft-holder needs ~83 mm vs UMTS 50 mm)
-    park_kw = dict(
-        park_x=PARK_NOZZLE_X_MM,
-        park_y=PARK_NOZZLE_Y_MM,
-        travel_f=travel_feed_mm_min(),
-        z_travel_f=z_travel_feed_mm_min(),
-    )
-    start = patch_holder_templates(read(tpl_dir / "bambu_start.gcode"), z_clear, **park_kw)
-    end = patch_holder_templates(read(tpl_dir / "bambu_end.gcode"), z_clear, **park_kw)
-    pause_tpl = patch_holder_templates(read(tpl_dir / "page_pause.gcode"), z_clear, **park_kw)
-
-    if not pause_beep:
-        pause_tpl = re.sub(
-            r"; --- page-flip alert beep.*?; --- end beep ---\n",
-            "", pause_tpl, flags=re.S,
-        )
-        end = re.sub(
-            r"; --- print-complete fanfare.*?; --- end fanfare ---\n",
-            "", end, flags=re.S,
-        )
+    start, pause_tpl, end = job_templates(tpl_dir, z_clear, pause_beep_enabled())
 
     order_label = "spread (unfolded signature)" if args.page_order == "spread" else "sequential"
     start_label = f" from page {args.start_page}" if args.start_page > 1 else ""
@@ -221,7 +274,7 @@ def main() -> None:
         f"Merging {n} pages{start_label} -> {out_path} "
         f"(order={order_label}, holder={profile.name}, park=({PARK_NOZZLE_X_MM:.0f},"
         f"{PARK_NOZZLE_Y_MM:.0f}) Z={z_clear:.1f}, "
-        f"~{mpp} min/page, est {total_min} min total)"
+        f"~{sum(page_min) / max(n, 1):.1f} min/page, est {total_min} min total)"
     )
 
     with out_path.open("w") as out:
@@ -234,7 +287,7 @@ def main() -> None:
         # EXECUTABLE_BLOCK
         out.write("; EXECUTABLE_BLOCK_START\n")
         out.write(f"M73 P0 R{total_min}\n")
-        out.write(motion_limits())
+        out.write(motion)
 
         # Our minimal start G-code
         out.write(start)
@@ -245,15 +298,15 @@ def main() -> None:
             page_num = page_num_from_path(page)
             out.write(f";===== PAGE {page_num:02d} =====\n")
             out.write(layer_marker(i))
-            page_progress = int((i - 1) / n * 100)
-            page_remaining = (n - i + 1) * mpp
-            out.write(f"M73 P{page_progress} R{page_remaining}\n")
+            out.write(f"; est page time: {page_notes[i - 1]}\n")
+            out.write(f"M73 P{progress_percent(page_min, i - 1)} "
+                      f"R{remaining_minutes(page_min, i - 1)}\n")
             out.write(page.read_text())
 
             if i < n:
                 next_page_num = page_num_from_path(pages[i])
-                next_progress = int(i / n * 100)
-                next_remaining = (n - i) * mpp
+                next_progress = progress_percent(page_min, i)
+                next_remaining = remaining_minutes(page_min, i)
                 pause = pause_tpl
                 pause = pause.replace("{NEXT_PAGE}", f"{next_page_num:02d}")
                 pause = pause.replace("{PROGRESS}", str(next_progress))

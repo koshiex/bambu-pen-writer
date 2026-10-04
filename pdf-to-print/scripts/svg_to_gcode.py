@@ -44,14 +44,17 @@ from gcode_experimental import (  # noqa: E402
     resolve_experimental_params,
 )
 from holder_config import (  # noqa: E402
+    DEFAULT_DRAW_SPEED_MM_S,
     UMTS,
     TRAVEL_SPEED_MM_S,
     Z_TRAVEL_SPEED_MM_S,
+    draw_speed_mm_s,
     nozzle_x_max_pen,
     paper_origin_x,
     paper_origin_y,
     select_profile,
     travel_feed_mm_min,
+    z_hop_for,
     z_travel_feed_mm_min,
 )
 
@@ -98,14 +101,16 @@ def apply_holder_profile(*, soft_holder: bool = False) -> None:
     pen-nozzle offset and Z change per holder.
     """
     global _ACTIVE_HOLDER, PEN_OFFSET_X, PEN_OFFSET_Y, PAPER_ORIGIN_X, PAPER_ORIGIN_Y
-    global Z_PEN_DOWN, Z_HOP
+    global Z_PEN_DOWN, Z_HOP, DRAW_SPEED_MM_S, DRAW_FEED_MM_MIN
 
     profile = select_profile(soft_holder=soft_holder)
     _ACTIVE_HOLDER = profile
     PEN_OFFSET_X = profile.pen_offset_x
     PEN_OFFSET_Y = profile.pen_offset_y
     Z_PEN_DOWN = profile.z_pen_down
-    Z_HOP = profile.z_hop
+    Z_HOP = z_hop_for(profile)
+    DRAW_SPEED_MM_S = draw_speed_mm_s()
+    DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
     PAPER_ORIGIN_X = paper_origin_x(PAPER_LEFT, PEN_OFFSET_X)
     PAPER_ORIGIN_Y = paper_origin_y(PAPER_FRONT, PAPER_H, PEN_OFFSET_Y)
 
@@ -143,7 +148,8 @@ READING_ROW_AXIS_RATIO = 0.45
 READING_ROW_AXIS_AUTO = False
 
 # XY feed for pen-down moves (G1 … X Y F…). Marlin/Bambu use mm/min → mm/s × 60.
-DRAW_SPEED_MM_S = 500.0
+# apply_holder_profile() applies env PDF_TO_PRINT_DRAW_SPEED_MM_S (holder_config.draw_speed_mm_s).
+DRAW_SPEED_MM_S = DEFAULT_DRAW_SPEED_MM_S
 DRAW_FEED_MM_MIN = int(DRAW_SPEED_MM_S * 60)
 
 # Pen-up: G0 XY and G1 Z (see holder_config TRAVEL_SPEED_MM_S / Z_TRAVEL_SPEED_MM_S).
@@ -557,6 +563,15 @@ def _orient_strokes_left_to_right(doc: vp.Document) -> None:
         doc.layers[lid] = vp.LineCollection(lines=oriented, metadata=lc.metadata)
 
 
+def page_transform_commands() -> list[str]:
+    """vpype commands after `read`: portrait page SVG → landscape paper in the nozzle frame.
+
+    Shared with printer_fidelity.py, which maps emitted G-code back onto the source page.
+    """
+    return ["pagerotate", "--clockwise", "scale", "-o", "0", "0", "--", "1", "-1",
+            "translate", PAPER_ORIGIN_X, PAPER_ORIGIN_Y]
+
+
 def convert_one(
     svg: Path,
     out: Path,
@@ -579,25 +594,8 @@ def convert_one(
     min_len_mm = _effective_stroke_min_length_mm(stroke_min_length_mm)
     qs = shlex.quote(str(svg.resolve()))
     qout = shlex.quote(str(out.resolve()))
-    parts = [
-        "read",
-        "--quantization",
-        READ_QUANTIZATION,
-        "--single-layer",
-        qs,
-        "pagerotate",
-        "--clockwise",
-        "scale",
-        "-o",
-        "0",
-        "0",
-        "--",
-        "1",
-        "-1",
-        "translate",
-        PAPER_ORIGIN_X,
-        PAPER_ORIGIN_Y,
-    ]
+    parts = ["read", "--quantization", READ_QUANTIZATION, "--single-layer", qs]
+    parts += page_transform_commands()
     if not skip_linemerge:
         parts.extend(["linemerge", "--tolerance", LINEMERGE_TOLERANCE])
     if min_len_mm > 0:
@@ -712,7 +710,10 @@ def main() -> None:
     soft_holder = args.soft_holder or os.environ.get(
         "PDF_TO_PRINT_SOFT_HOLDER", ""
     ).strip().lower() in ("1", "true", "yes", "on")
-    apply_holder_profile(soft_holder=soft_holder)
+    try:
+        apply_holder_profile(soft_holder=soft_holder)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
     if soft_holder:
         print(
             f"  holder: soft-holder  pen_offset=({PEN_OFFSET_X}, {PEN_OFFSET_Y}) mm  "

@@ -419,8 +419,9 @@ def apply_experimental_postprocess(
     rng = random.Random(params.rng_seed)
 
     blocks, trailing = parse_stroke_blocks(path, z_pen, z_up, stop_at_experimental_marker=True)
-    # Drop prior experimental section if re-run
-    trailing = [ln for ln in trailing if EXPERIMENTAL_STROKES_MARKER not in ln]
+    # Drop prior experimental section (marker + its strokes) if re-run
+    cut = next((i for i, ln in enumerate(trailing) if EXPERIMENTAL_STROKES_MARKER in ln), len(trailing))
+    trailing = trailing[:cut]
 
     if flags.variable_pressure:
         for block in blocks:
@@ -472,7 +473,10 @@ def apply_experimental_postprocess(
                 )
             )
 
-    if extra_blocks:
-        trailing = [EXPERIMENTAL_STROKES_MARKER, ""] + trailing
-
-    path.write_text(emit_gcode(blocks + extra_blocks, trailing), encoding="utf-8")
+    if not extra_blocks:
+        path.write_text(emit_gcode(blocks, trailing), encoding="utf-8")
+        return
+    # Marker precedes the appended strokes: parsers with stop_at_experimental_marker see only
+    # the traced text, and a re-run drops the previous strikethrough section.
+    text = emit_gcode(blocks, [EXPERIMENTAL_STROKES_MARKER]) + emit_gcode(extra_blocks, trailing)
+    path.write_text(text, encoding="utf-8")

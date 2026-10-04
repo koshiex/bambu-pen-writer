@@ -127,12 +127,17 @@ def main() -> None:
             invert_reading_sort=False,
         )
         assert EXPERIMENTAL_STROKES_MARKER in path.read_text(encoding="utf-8")
-        blocks2, _ = parse_stroke_blocks(path, Z_PEN, Z_UP)
+        blocks2, _ = parse_stroke_blocks(path, Z_PEN, Z_UP, stop_at_experimental_marker=False)
         assert len(blocks2) >= 4, "expected base strokes + strikethrough"
         strike_poly = blocks2[-1].polyline_xy()
         dy = abs(float(strike_poly[-1].imag - strike_poly[0].imag))
         dx = abs(float(strike_poly[-1].real - strike_poly[0].real))
         assert dy > dx, f"strikethrough should run along Y (word axis), got dx={dx} dy={dy}"
+
+        # Marker must delimit the appended strikethrough block (it precedes the extra strokes),
+        # so parsers that stop at the marker see only the original text strokes.
+        base_only, _ = parse_stroke_blocks(path, Z_PEN, Z_UP, stop_at_experimental_marker=True)
+        assert len(base_only) == 3, f"expected 3 text strokes before marker, got {len(base_only)}"
 
     print("test_gcode_experimental: OK")
 

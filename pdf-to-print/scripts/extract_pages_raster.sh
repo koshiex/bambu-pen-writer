@@ -15,6 +15,9 @@
 #   EXPORT_DPI     — PNG DPI for inkscape (default: 300)
 #   MKBITMAP_OPTS  — with potrace: mkbitmap args (default: -f 2 -s 1 -t 0.45)
 #   POTRACE_OPTS   — extra potrace flags before -s (default: empty)
+#   SKELETON_TOPOLOGY — euler (default: Euler trails, ~half the pen lifts, smoothed)
+#                       | legacy (one chain per skeleton junction, pixel vertices)
+#   PNG_KEEP_DIR   — if set, copy page_NN.png rasters there (printer_sim fidelity check)
 #
 # Requires: inkscape; python3 (.venv) with numpy scikit-image networkx pillow.
 # potrace mode additionally: magick|convert, potrace, mkbitmap
@@ -136,7 +139,13 @@ for i in $(seq 1 "$PAGE_COUNT"); do
     # min-polyline-points=4: require ≥3 segments (~0.25mm at 300dpi) to keep a skeleton chain.
     # Removes 1-2px junction artifacts before SVG. Override: SKELETON_MIN_POINTS=N
     SKELETON_MIN_PTS="${SKELETON_MIN_POINTS:-4}"
-    "$PYTHON" "$SKELETON" "$png" "$out" --min-polyline-points "$SKELETON_MIN_PTS"
+    "$PYTHON" "$SKELETON" "$png" "$out" --min-polyline-points "$SKELETON_MIN_PTS" \
+      --topology "${SKELETON_TOPOLOGY:-euler}"
+  fi
+  # Keep the source raster for the printer simulation fidelity check (build.sh Phase 4).
+  if [[ -n "${PNG_KEEP_DIR:-}" ]]; then
+    mkdir -p "$PNG_KEEP_DIR"
+    cp "$png" "$PNG_KEEP_DIR/page_${num}.png"
   fi
 done
 

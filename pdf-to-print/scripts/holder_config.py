@@ -1,7 +1,8 @@
-"""Pen-holder profiles for P1S plotter pipeline (XY offset + Z calibration)."""
+"""Pen-holder profiles for P1S plotter pipeline (XY offset + Z calibration + motion settings)."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -85,3 +86,45 @@ def z_travel_clearance(z_pen_down: float) -> float:
 
 def z_travel_clearance_for_profile(profile: HolderProfile) -> float:
     return z_travel_clearance(profile.z_pen_down)
+
+
+# --- Pen motion tuning (env overrides; calibrate with scripts/calibration_sheets_gcode.py) ----------
+# Pen lifts dominate page time (Z moves the bed at 20 mm/s, 500 mm/s²): keep Z-hop as small as
+# the hop-ladder sheet allows. Draw speed/accel barely change page time once strokes are
+# smoothed, so defaults favour gel-ink quality.
+Z_HOP_ENV = "PDF_TO_PRINT_Z_HOP_MM"
+DRAW_SPEED_ENV = "PDF_TO_PRINT_DRAW_SPEED_MM_S"
+DRAW_ACCEL_ENV = "PDF_TO_PRINT_DRAW_ACCEL_MM_S2"
+
+DEFAULT_DRAW_SPEED_MM_S = 100.0
+DEFAULT_DRAW_ACCEL_MM_S2 = 5000.0
+Z_HOP_RANGE_MM = (0.5, 20.0)
+DRAW_SPEED_RANGE_MM_S = (5.0, 500.0)      # P1S M203 X/Y max 500
+DRAW_ACCEL_RANGE_MM_S2 = (500.0, 20000.0)  # P1S M201 X/Y max 20000
+
+
+def env_float_in_range(key: str, default: float, bounds: tuple[float, float]) -> float:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key}={raw!r} is not a number") from exc
+    lo, hi = bounds
+    if not lo <= value <= hi:
+        raise ValueError(f"{key}={value:g} outside allowed range [{lo:g}, {hi:g}]")
+    return value
+
+
+def z_hop_for(profile: HolderProfile) -> float:
+    """Pen lift above pen-down Z; env PDF_TO_PRINT_Z_HOP_MM overrides the holder default."""
+    return env_float_in_range(Z_HOP_ENV, profile.z_hop, Z_HOP_RANGE_MM)
+
+
+def draw_speed_mm_s() -> float:
+    return env_float_in_range(DRAW_SPEED_ENV, DEFAULT_DRAW_SPEED_MM_S, DRAW_SPEED_RANGE_MM_S)
+
+
+def draw_accel_mm_s2() -> float:
+    return env_float_in_range(DRAW_ACCEL_ENV, DEFAULT_DRAW_ACCEL_MM_S2, DRAW_ACCEL_RANGE_MM_S2)

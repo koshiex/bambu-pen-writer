@@ -11,15 +11,18 @@
 #       $2 = output dir for SVGs (default: build/svg)
 #
 # Env:
+#   RASTERIZER     — gs (default, Ghostscript) | inkscape (legacy: its PDF import drops the
+#                    alternate glyphs Word embeds and shifts the rest of the line)
 #   TRACE_MODE     — skeleton (default) | potrace
-#   EXPORT_DPI     — PNG DPI for inkscape (default: 300)
+#   EXPORT_DPI     — PNG DPI (default: 300)
 #   MKBITMAP_OPTS  — with potrace: mkbitmap args (default: -f 2 -s 1 -t 0.45)
 #   POTRACE_OPTS   — extra potrace flags before -s (default: empty)
 #   SKELETON_TOPOLOGY — euler (default: Euler trails, ~half the pen lifts, smoothed)
 #                       | legacy (one chain per skeleton junction, pixel vertices)
 #   PNG_KEEP_DIR   — if set, copy page_NN.png rasters there (printer_sim fidelity check)
 #
-# Requires: inkscape; python3 (.venv) with numpy scikit-image networkx pillow.
+# Requires: gs (or inkscape with RASTERIZER=inkscape); python3 (.venv) with numpy scikit-image
+# networkx pillow.
 # potrace mode additionally: magick|convert, potrace, mkbitmap
 
 set -euo pipefail
@@ -30,6 +33,14 @@ EXPORT_DPI="${EXPORT_DPI:-300}"
 MKBITMAP_OPTS="${MKBITMAP_OPTS:--f 2 -s 1 -t 0.45}"
 POTRACE_OPTS="${POTRACE_OPTS:-}"
 TRACE_MODE="${TRACE_MODE:-skeleton}"
+RASTERIZER="${RASTERIZER:-gs}"
+case "$RASTERIZER" in
+  gs|inkscape) ;;
+  *)
+    echo "ERROR: RASTERIZER must be gs or inkscape, got: $RASTERIZER" >&2
+    exit 1
+    ;;
+esac
 case "$TRACE_MODE" in
   skeleton|potrace) ;;
   *)
@@ -49,12 +60,10 @@ if [[ ! -f "$PDF" ]]; then
   exit 1
 fi
 
-for cmd in inkscape; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "ERROR: $cmd not in PATH" >&2
-    exit 1
-  fi
-done
+if ! command -v "$RASTERIZER" >/dev/null 2>&1; then
+  echo "ERROR: $RASTERIZER not in PATH (RASTERIZER=gs needs Ghostscript: brew install ghostscript)" >&2
+  exit 1
+fi
 if [[ "$TRACE_MODE" == "potrace" ]]; then
   for cmd in potrace mkbitmap; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -101,7 +110,20 @@ if ! [[ "$PAGE_COUNT" =~ ^[0-9]+$ ]] || [[ "$PAGE_COUNT" -lt 1 ]]; then
   exit 1
 fi
 
-echo "Raster extract: $PAGE_COUNT pages from $PDF -> $OUT_DIR (dpi=$EXPORT_DPI, TRACE_MODE=$TRACE_MODE)"
+echo "Raster extract: $PAGE_COUNT pages from $PDF -> $OUT_DIR (dpi=$EXPORT_DPI, rasterizer=$RASTERIZER, TRACE_MODE=$TRACE_MODE)"
+
+# One page -> grey PNG on white. gs renders the PDF as written (glyph IDs, alternates, positions).
+rasterize_page() {
+  local page="$1" png="$2"
+  if [[ "$RASTERIZER" == "gs" ]]; then
+    gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pnggray "-r$EXPORT_DPI" \
+      -dTextAlphaBits=4 -dGraphicsAlphaBits=4 "-dFirstPage=$page" "-dLastPage=$page" \
+      "-sOutputFile=$png" "$PDF"
+  else
+    inkscape "$PDF" --pages="$page" --export-type=png "--export-dpi=$EXPORT_DPI" \
+      "--export-filename=$png" 2>/dev/null
+  fi
+}
 
 for i in $(seq 1 "$PAGE_COUNT"); do
   num=$(printf "%02d" "$i")
@@ -109,14 +131,8 @@ for i in $(seq 1 "$PAGE_COUNT"); do
   out="$OUT_DIR/page_${num}.svg"
 
   echo "  page $i -> $out"
-  if ! inkscape "$PDF" \
-    --pages="$i" \
-    --export-type=png \
-    "--export-dpi=$EXPORT_DPI" \
-    "--export-filename=$png" \
-    2>/dev/null
-  then
-    echo "ERROR: inkscape failed on page $i" >&2
+  if ! rasterize_page "$i" "$png"; then
+    echo "ERROR: $RASTERIZER failed on page $i" >&2
     exit 1
   fi
 

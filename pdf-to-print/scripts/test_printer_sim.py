@@ -77,6 +77,19 @@ def test_default_compression_matches_hop_ladder() -> None:
     assert "DRAG" not in codes(r) and not r.warnings, (r.errors, r.warnings)
 
 
+def test_cli_uses_the_same_contact_model_as_simconfig() -> None:
+    # build.sh Phase 4 calls the CLI without --pen-down-compression; it must not fall back to 1.0.
+    import subprocess
+    import tempfile
+    low = stroke([(60, 100), (70, 100)], z_up=ZD + 1.5) + stroke([(90, 100), (95, 100)], z_up=ZD + 1.5)
+    with tempfile.TemporaryDirectory() as td:
+        g, rep = Path(td) / "j.gcode", Path(td) / "j.sim.md"
+        g.write_text("\n".join(job([low])) + "\n")
+        subprocess.run([sys.executable, str(Path(__file__).with_name("printer_sim.py")), str(g),
+                        "--holder", "soft", "--report", str(rep)], capture_output=True, text=True)
+        assert "DRAG" in rep.read_text(), rep.read_text()[:400]
+
+
 def test_hop_smaller_than_spring_compression_drags() -> None:
     low = stroke([(60, 100), (70, 100)], z_up=ZD + 0.5) + stroke([(90, 100), (95, 100)])
     r = simulate_job(job([low]), SimConfig(holder="soft", pen_down_compression_mm=1.0))

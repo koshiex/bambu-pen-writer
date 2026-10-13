@@ -403,11 +403,12 @@ def main() -> None:
     p.add_argument("job", type=Path)
     p.add_argument("--holder", choices=("soft", "umts"), required=True)
     p.add_argument("--reference", type=Path, help="job already run on hardware (envelope check)")
-    p.add_argument("--paper-thickness", type=float, default=3.0)
-    p.add_argument("--pen-down-compression", type=float, default=1.0)
-    p.add_argument("--spring-travel", type=float, default=4.0)
-    p.add_argument("--pen-protrusion", type=float, default=10.0)
-    p.add_argument("--holder-radius", type=float, default=12.0)
+    # defaults come from SimConfig so build.sh Phase 4 and the tests use one contact model
+    p.add_argument("--paper-thickness", type=float, default=SimConfig.paper_thickness_mm)
+    p.add_argument("--pen-down-compression", type=float, default=SimConfig.pen_down_compression_mm)
+    p.add_argument("--spring-travel", type=float, default=SimConfig.spring_travel_mm)
+    p.add_argument("--pen-protrusion", type=float, default=SimConfig.pen_protrusion_mm)
+    p.add_argument("--holder-radius", type=float, default=SimConfig.holder_radius_mm)
     p.add_argument("--stop", type=parse_stop, action="append", default=[])
     p.add_argument("--l-stop-height", type=float, default=None,
                    help="model an L-stop of this height along the paper's left and front edges")

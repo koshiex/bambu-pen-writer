@@ -46,7 +46,7 @@ pdfs/2.pdf (24 страницы handwriting font, page 165×205 mm portrait)
     │       page count: mdls (macOS) | python regex fallback
     │
     ├── scripts/extract_pages_raster.sh    (default в build.sh)
-    │       inkscape --pages=N --export-type=png --export-dpi=DPI
+    │       gs -sDEVICE=pnggray -rDPI -dFirstPage=N (RASTERIZER=inkscape — старый путь)
     │       → по умолчанию png_to_skeleton_svg.py (скелет штриха = одна линия)
     │       → или TRACE_MODE=potrace: mkbitmap → potrace → normalize_traced_svg.py
     ▼
@@ -96,7 +96,9 @@ PDF → PNG → SVG. По умолчанию **`TRACE_MODE=skeleton`**: [`script
 
 Режим **`TRACE_MODE=potrace`**: PNG → ImageMagick → mkbitmap → potrace → [`normalize_traced_svg.py`](scripts/normalize_traced_svg.py) — контур силуэта; на кольцевых штрихах снова возможны два контура.
 
-Зависимости: `inkscape`; `.venv` с **numpy, scikit-image, networkx, Pillow**. Для potrace-режима дополнительно: `potrace`, `mkbitmap`, ImageMagick.
+Растеризация — **Ghostscript** (`RASTERIZER=gs`, по умолчанию с 2026-10-12). Inkscape (`RASTERIZER=inkscape`) при импорте PDF теряет альтернативные начертания глифов, которые подставляет Word (в `9.pdf` их 961), и сдвигает остаток строки: совпадение растра с PDF было 43 % площади (IoU против Ghostscript). Векторный путь `extract_pages.sh` тоже идёт через Inkscape и страдает тем же.
+
+Зависимости: `gs` (Ghostscript; для `RASTERIZER=inkscape` — `inkscape`); `.venv` с **numpy, scikit-image, networkx, Pillow**. Для potrace-режима дополнительно: `potrace`, `mkbitmap`, ImageMagick.
 
 Переменные окружения: `TRACE_MODE`, `EXPORT_DPI` (default 300), `SKELETON_TOPOLOGY` (`euler` по умолчанию | `legacy`); для potrace — `MKBITMAP_OPTS`, `POTRACE_OPTS`.
 
@@ -141,7 +143,7 @@ python3 scripts/plot_time_sim.py build/9/gcode/page_*.gcode   # разбивка
 | `PDF_TO_PRINT_DRAW_ACCEL_MM_S2` | 5000 | `M204 S` после блока лимитов; качество гелевой линии vs скорость |
 | `PDF_TO_PRINT_TIME_FACTOR` | 1.0 | реальное/модельное время для `M73` |
 
-Значения вне допустимого диапазона — ошибка сборки (не молча). Время страницы `pdfs/9.pdf` по модели: hop 6 → 11.5 мин, hop 3 → ~7.5, hop 2.5 → ~6.5 (тетрадь ≈ 2.6 ч против 4.3 ч), hop 2 → ~6.
+Значения вне допустимого диапазона — ошибка сборки (не молча). Время `pdfs/9.pdf` по модели (100 мм/с, `M204 S5000`): hop 6 → 11.5 мин/стр (тетрадь 4.6 ч), hop 3 → 7.8, hop 2.5 → 7.2 (2.9 ч), hop 2 → 6.6. Скорость и ускорение почти не влияют: при hop 2.5 даже 500 мм/с и 20000 мм/с² дают 6.4 мин/стр — письмо упирается в повороты (XY jerk 9 мм/с), а не в предел скорости.
 
 ### `scripts/calibration_sheets_gcode.py` — калибровочные листы
 

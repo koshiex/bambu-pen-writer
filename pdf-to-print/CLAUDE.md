@@ -18,7 +18,7 @@ Authoritative docs: `docs/pipeline.md` (tech), `docs/operator-manual.md` (hardwa
 
 `build.sh` runs 5 phases: (0) `e2e_reading_order_pipeline.py` synthetic smoke, (1) PDF→SVG via `extract_pages_raster.sh` (default) or `extract_pages.sh` (`EXTRACT=vector`), (2) `svg_to_gcode.py` per page, (2b) `validate_reading_order_gcode.py --strict` per page, (3) `merge_pages.py` concatenation with Bambu header/config blocks + page-pause templates (refuses pages whose pen-down Z belongs to another holder), (4) `printer_sim.py` dry run of the whole job + fidelity against the page rasters kept in `build/<pdf>/png` — the build fails on any error (`PDF_TO_PRINT_SIMULATE=0` skips).
 
-Auto-activates `.venv/bin/activate` if present. No `requirements.txt` — env is hand-built. Python **3.13** (vpype is incompatible with 3.14 — `pkg_resources` removed). Key deps: `vpype 1.15`, `vpype-gcode`, `scikit-image`, `networkx`, `scipy`, `Pillow`, `shapely`. System tools: Inkscape ≥ 1.4 (needs `--pages=N`), `magick`, optional `potrace`+`mkbitmap`.
+Auto-activates `.venv/bin/activate` if present. No `requirements.txt` — env is hand-built. Python **3.13** (vpype is incompatible with 3.14 — `pkg_resources` removed). Key deps: `vpype 1.15`, `vpype-gcode`, `scikit-image`, `networkx`, `scipy`, `Pillow`, `shapely`. System tools: Ghostscript `gs` (default rasteriser in `extract_pages_raster.sh`; Inkscape's PDF import drops Word's alternate glyphs), Inkscape ≥ 1.4 (vector extract and `RASTERIZER=inkscape`, needs `--pages=N`), `magick`, optional `potrace`+`mkbitmap`.
 
 Direct sub-steps (useful for iteration):
 ```bash
@@ -87,4 +87,4 @@ No pytest/CI (pytest is not in the venv). Bare-`assert` scripts, all `python3 sc
 - `build/svg/` — `page_NN.svg` (24 files, gitignored).
 - `build/<pdf>/gcode/` — `page_NN.gcode` per page, no headers (~0.6–1 MB each with Euler trails, gitignored).
 - `output/` — final `<pdf>[_experimental].gcode` (~19 MB) plus `calibration.gcode`, alignment template and `test_*.gcode` calibration sheets from `scripts/calibration_sheets_gcode.py` (gitignored).
-- `fonts/`, `shiki(6).ttf` — handwriting fonts used to generate the input PDFs externally.
+- `fonts/`, `shiki(6).ttf` — older copies of the handwriting font (v6). Current PDFs (`9.pdf`, `10.pdf`) embed **shiki v8** (`~/Library/Fonts/shiki(8).ttf`): 373 glyphs, `calt` alternates (`.ssN`), different metrics from v6 — any font-based tool must load v8.
